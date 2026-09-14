@@ -141,7 +141,7 @@ final class ModelTests: XCTestCase {
   func testCounterValidFlags() {
     let streamFlags: StreamInputCounterValidFlags = [.mediaLocked, .framesRx]
     XCTAssertTrue(streamFlags.contains(.framesRx))
-    XCTAssertFalse(streamFlags.contains(.streamReset))
+    XCTAssertFalse(streamFlags.contains(.streamInterrupted))
     let interfaceFlags: AvbInterfaceCounterValidFlags = [.linkUp, .framesTx]
     XCTAssertTrue(interfaceFlags.contains(.linkUp))
     XCTAssertFalse(interfaceFlags.contains(.linkDown))

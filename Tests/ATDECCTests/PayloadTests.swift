@@ -193,7 +193,7 @@ final class PayloadTests: XCTestCase {
 
   func testGetCountersResponse() throws {
     var data = be16(DescriptorType.avbInterface.rawValue) + be16(0)
-    data += be32(AvbInterfaceCounterValidFlags.linkUp.rawValue)
+    data += [0x00, 0x00, 0x00, 0x01] // counters_valid: LINK_UP (bit 31, MSB-first)
     for counter in 0..<UInt32(DescriptorCounters.count) {
       data += be32(counter)
     }
@@ -204,6 +204,31 @@ final class PayloadTests: XCTestCase {
     }
     XCTAssertEqual(AvbInterfaceCounterValidFlags(rawValue: countersValid), .linkUp)
     XCTAssertEqual(counters[31], 31)
+  }
+
+  func testCounterValidFlagsWireValues() {
+    // IEEE 1722.1-2021 Tables 7-150 to 7-158 number bits MSB-first: bit 31 is 0x0000_0001
+    XCTAssertEqual(EntityCounterValidFlags.entitySpecific1.rawValue, 0x8000_0000)
+    XCTAssertEqual(AvbInterfaceCounterValidFlags.linkUp.rawValue, 0x0000_0001)
+    XCTAssertEqual(AvbInterfaceCounterValidFlags.gptpGmChanged.rawValue, 0x0000_0020)
+    XCTAssertEqual(AvbInterfaceCounterValidFlags.entitySpecific8.rawValue, 0x0100_0000)
+    XCTAssertEqual(AvbInterfaceCounterValidFlags.entitySpecific1.rawValue, 0x8000_0000)
+    XCTAssertEqual(ClockDomainCounterValidFlags.locked.rawValue, 0x0000_0001)
+    XCTAssertEqual(ClockDomainCounterValidFlags.unlocked.rawValue, 0x0000_0002)
+    XCTAssertEqual(ClockDomainCounterValidFlags.entitySpecific1.rawValue, 0x8000_0000)
+    XCTAssertEqual(StreamInputCounterValidFlags.mediaLocked.rawValue, 0x0000_0001)
+    XCTAssertEqual(StreamInputCounterValidFlags.streamInterrupted.rawValue, 0x0000_0004)
+    XCTAssertEqual(StreamInputCounterValidFlags.framesRx.rawValue, 0x0000_0800)
+    XCTAssertEqual(StreamInputCounterValidFlags.framesTx.rawValue, 0x0000_1000)
+    XCTAssertEqual(StreamInputCounterValidFlags.entitySpecific1.rawValue, 0x8000_0000)
+    XCTAssertEqual(StreamOutputCounterValidFlags.streamStart.rawValue, 0x0000_0001)
+    XCTAssertEqual(StreamOutputCounterValidFlags.streamInterrupted.rawValue, 0x0000_0004)
+    XCTAssertEqual(StreamOutputCounterValidFlags.mediaReset.rawValue, 0x0000_0008)
+    XCTAssertEqual(StreamOutputCounterValidFlags.framesTx.rawValue, 0x0000_0080)
+    XCTAssertEqual(StreamOutputCounterValidFlags.entitySpecific1.rawValue, 0x8000_0000)
+    // Milan 1.2 §5.3.7.7 has no STREAM_INTERRUPTED
+    XCTAssertEqual(StreamOutputCounterValidFlagsMilan12.mediaReset.rawValue, 0x0000_0004)
+    XCTAssertEqual(StreamOutputCounterValidFlagsMilan12.framesTx.rawValue, 0x0000_0010)
   }
 
   // MARK: - MVU payloads

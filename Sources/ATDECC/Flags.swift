@@ -178,6 +178,10 @@ public struct StreamInfoFlagsEx: OptionSet, Sendable, Hashable {
 
 // MARK: - Counters
 
+// The counters_valid tables number bits MSB-first, as the rest of IEEE 1722.1 does: bit 31
+// (the first counter) is the least-significant bit of the quadlet, and ENTITY_SPECIFIC_1 at
+// bit 0 is the most-significant.
+
 /// Valid-counter flags for ENTITY GET_COUNTERS (IEEE 1722.1-2021 §7.4.42).
 public struct EntityCounterValidFlags: OptionSet, Sendable, Hashable {
   public let rawValue: UInt32
@@ -193,59 +197,114 @@ public struct EntityCounterValidFlags: OptionSet, Sendable, Hashable {
   public static let entitySpecific8 = EntityCounterValidFlags(rawValue: 1 << 24)
 }
 
-/// Valid-counter flags for AVB_INTERFACE GET_COUNTERS.
+/// Valid-counter flags for AVB_INTERFACE GET_COUNTERS (IEEE 1722.1-2021 §7.4.42.2.2).
 public struct AvbInterfaceCounterValidFlags: OptionSet, Sendable, Hashable {
   public let rawValue: UInt32
   public init(rawValue: UInt32) { self.rawValue = rawValue }
 
-  public static let linkUp = AvbInterfaceCounterValidFlags(rawValue: 1 << 31)
-  public static let linkDown = AvbInterfaceCounterValidFlags(rawValue: 1 << 30)
-  public static let framesTx = AvbInterfaceCounterValidFlags(rawValue: 1 << 29)
-  public static let framesRx = AvbInterfaceCounterValidFlags(rawValue: 1 << 28)
-  public static let rxCrcError = AvbInterfaceCounterValidFlags(rawValue: 1 << 27)
-  public static let gptpGmChanged = AvbInterfaceCounterValidFlags(rawValue: 1 << 26)
+  public static let linkUp = AvbInterfaceCounterValidFlags(rawValue: 1 << 0)
+  public static let linkDown = AvbInterfaceCounterValidFlags(rawValue: 1 << 1)
+  public static let framesTx = AvbInterfaceCounterValidFlags(rawValue: 1 << 2)
+  public static let framesRx = AvbInterfaceCounterValidFlags(rawValue: 1 << 3)
+  public static let rxCrcError = AvbInterfaceCounterValidFlags(rawValue: 1 << 4)
+  public static let gptpGmChanged = AvbInterfaceCounterValidFlags(rawValue: 1 << 5)
+  public static let entitySpecific8 = AvbInterfaceCounterValidFlags(rawValue: 1 << 24)
+  public static let entitySpecific7 = AvbInterfaceCounterValidFlags(rawValue: 1 << 25)
+  public static let entitySpecific6 = AvbInterfaceCounterValidFlags(rawValue: 1 << 26)
+  public static let entitySpecific5 = AvbInterfaceCounterValidFlags(rawValue: 1 << 27)
+  public static let entitySpecific4 = AvbInterfaceCounterValidFlags(rawValue: 1 << 28)
+  public static let entitySpecific3 = AvbInterfaceCounterValidFlags(rawValue: 1 << 29)
+  public static let entitySpecific2 = AvbInterfaceCounterValidFlags(rawValue: 1 << 30)
+  public static let entitySpecific1 = AvbInterfaceCounterValidFlags(rawValue: 1 << 31)
 }
 
-/// Valid-counter flags for CLOCK_DOMAIN GET_COUNTERS.
+/// Valid-counter flags for CLOCK_DOMAIN GET_COUNTERS (IEEE 1722.1-2021 §7.4.42.2.3).
 public struct ClockDomainCounterValidFlags: OptionSet, Sendable, Hashable {
   public let rawValue: UInt32
   public init(rawValue: UInt32) { self.rawValue = rawValue }
 
-  public static let locked = ClockDomainCounterValidFlags(rawValue: 1 << 31)
-  public static let unlocked = ClockDomainCounterValidFlags(rawValue: 1 << 30)
+  public static let locked = ClockDomainCounterValidFlags(rawValue: 1 << 0)
+  public static let unlocked = ClockDomainCounterValidFlags(rawValue: 1 << 1)
+  public static let entitySpecific8 = ClockDomainCounterValidFlags(rawValue: 1 << 24)
+  public static let entitySpecific7 = ClockDomainCounterValidFlags(rawValue: 1 << 25)
+  public static let entitySpecific6 = ClockDomainCounterValidFlags(rawValue: 1 << 26)
+  public static let entitySpecific5 = ClockDomainCounterValidFlags(rawValue: 1 << 27)
+  public static let entitySpecific4 = ClockDomainCounterValidFlags(rawValue: 1 << 28)
+  public static let entitySpecific3 = ClockDomainCounterValidFlags(rawValue: 1 << 29)
+  public static let entitySpecific2 = ClockDomainCounterValidFlags(rawValue: 1 << 30)
+  public static let entitySpecific1 = ClockDomainCounterValidFlags(rawValue: 1 << 31)
 }
 
-/// Valid-counter flags for STREAM_INPUT GET_COUNTERS.
+/// Valid-counter flags for STREAM_INPUT GET_COUNTERS (IEEE 1722.1-2021 §7.4.42.2.4).
 public struct StreamInputCounterValidFlags: OptionSet, Sendable, Hashable {
   public let rawValue: UInt32
   public init(rawValue: UInt32) { self.rawValue = rawValue }
 
-  public static let mediaLocked = StreamInputCounterValidFlags(rawValue: 1 << 31)
-  public static let mediaUnlocked = StreamInputCounterValidFlags(rawValue: 1 << 30)
-  public static let streamReset = StreamInputCounterValidFlags(rawValue: 1 << 29)
-  public static let seqNumMismatch = StreamInputCounterValidFlags(rawValue: 1 << 28)
-  public static let mediaReset = StreamInputCounterValidFlags(rawValue: 1 << 27)
-  public static let timestampUncertain = StreamInputCounterValidFlags(rawValue: 1 << 26)
-  public static let timestampValid = StreamInputCounterValidFlags(rawValue: 1 << 25)
-  public static let timestampNotValid = StreamInputCounterValidFlags(rawValue: 1 << 24)
-  public static let unsupportedFormat = StreamInputCounterValidFlags(rawValue: 1 << 23)
-  public static let lateTimestamp = StreamInputCounterValidFlags(rawValue: 1 << 22)
-  public static let earlyTimestamp = StreamInputCounterValidFlags(rawValue: 1 << 21)
-  public static let framesRx = StreamInputCounterValidFlags(rawValue: 1 << 20)
-  public static let framesTx = StreamInputCounterValidFlags(rawValue: 1 << 19)
+  public static let mediaLocked = StreamInputCounterValidFlags(rawValue: 1 << 0)
+  public static let mediaUnlocked = StreamInputCounterValidFlags(rawValue: 1 << 1)
+  public static let streamInterrupted = StreamInputCounterValidFlags(rawValue: 1 << 2)
+  @available(*, deprecated, renamed: "streamInterrupted")
+  public static let streamReset = streamInterrupted // IEEE 1722.1-2013 name
+  public static let seqNumMismatch = StreamInputCounterValidFlags(rawValue: 1 << 3)
+  public static let mediaReset = StreamInputCounterValidFlags(rawValue: 1 << 4)
+  public static let timestampUncertain = StreamInputCounterValidFlags(rawValue: 1 << 5)
+  public static let timestampValid = StreamInputCounterValidFlags(rawValue: 1 << 6)
+  public static let timestampNotValid = StreamInputCounterValidFlags(rawValue: 1 << 7)
+  public static let unsupportedFormat = StreamInputCounterValidFlags(rawValue: 1 << 8)
+  public static let lateTimestamp = StreamInputCounterValidFlags(rawValue: 1 << 9)
+  public static let earlyTimestamp = StreamInputCounterValidFlags(rawValue: 1 << 10)
+  public static let framesRx = StreamInputCounterValidFlags(rawValue: 1 << 11)
+  /// IEEE 1722.1-2013 only; reserved in IEEE 1722.1-2021, but still decoded by la_avdecc.
+  public static let framesTx = StreamInputCounterValidFlags(rawValue: 1 << 12)
+  public static let entitySpecific8 = StreamInputCounterValidFlags(rawValue: 1 << 24)
+  public static let entitySpecific7 = StreamInputCounterValidFlags(rawValue: 1 << 25)
+  public static let entitySpecific6 = StreamInputCounterValidFlags(rawValue: 1 << 26)
+  public static let entitySpecific5 = StreamInputCounterValidFlags(rawValue: 1 << 27)
+  public static let entitySpecific4 = StreamInputCounterValidFlags(rawValue: 1 << 28)
+  public static let entitySpecific3 = StreamInputCounterValidFlags(rawValue: 1 << 29)
+  public static let entitySpecific2 = StreamInputCounterValidFlags(rawValue: 1 << 30)
+  public static let entitySpecific1 = StreamInputCounterValidFlags(rawValue: 1 << 31)
 }
 
-/// Valid-counter flags for STREAM_OUTPUT GET_COUNTERS (Milan extension; the stock 1722.1
-/// layout has no descriptor-counter assignments).
+/// Valid-counter flags for STREAM_OUTPUT GET_COUNTERS (IEEE 1722.1-2021 §7.4.42.2.5), which
+/// Milan 1.3 also uses.
+///
+/// Milan 1.2 §5.3.7.7 laid the counters out without STREAM_INTERRUPTED and the timestamp
+/// validity counters; like la_avdecc, decode a Milan 1.2 entity's `counters_valid` with
+/// `StreamOutputCounterValidFlagsMilan12` instead.
 public struct StreamOutputCounterValidFlags: OptionSet, Sendable, Hashable {
   public let rawValue: UInt32
   public init(rawValue: UInt32) { self.rawValue = rawValue }
 
-  public static let streamStart = StreamOutputCounterValidFlags(rawValue: 1 << 31)
-  public static let streamStop = StreamOutputCounterValidFlags(rawValue: 1 << 30)
-  public static let mediaReset = StreamOutputCounterValidFlags(rawValue: 1 << 29)
-  public static let timestampUncertain = StreamOutputCounterValidFlags(rawValue: 1 << 28)
-  public static let framesTx = StreamOutputCounterValidFlags(rawValue: 1 << 27)
+  public static let streamStart = StreamOutputCounterValidFlags(rawValue: 1 << 0)
+  public static let streamStop = StreamOutputCounterValidFlags(rawValue: 1 << 1)
+  public static let streamInterrupted = StreamOutputCounterValidFlags(rawValue: 1 << 2)
+  public static let mediaReset = StreamOutputCounterValidFlags(rawValue: 1 << 3)
+  public static let timestampUncertain = StreamOutputCounterValidFlags(rawValue: 1 << 4)
+  public static let timestampValid = StreamOutputCounterValidFlags(rawValue: 1 << 5)
+  public static let timestampNotValid = StreamOutputCounterValidFlags(rawValue: 1 << 6)
+  public static let framesTx = StreamOutputCounterValidFlags(rawValue: 1 << 7)
+  public static let entitySpecific8 = StreamOutputCounterValidFlags(rawValue: 1 << 24)
+  public static let entitySpecific7 = StreamOutputCounterValidFlags(rawValue: 1 << 25)
+  public static let entitySpecific6 = StreamOutputCounterValidFlags(rawValue: 1 << 26)
+  public static let entitySpecific5 = StreamOutputCounterValidFlags(rawValue: 1 << 27)
+  public static let entitySpecific4 = StreamOutputCounterValidFlags(rawValue: 1 << 28)
+  public static let entitySpecific3 = StreamOutputCounterValidFlags(rawValue: 1 << 29)
+  public static let entitySpecific2 = StreamOutputCounterValidFlags(rawValue: 1 << 30)
+  public static let entitySpecific1 = StreamOutputCounterValidFlags(rawValue: 1 << 31)
+}
+
+/// Valid-counter flags for STREAM_OUTPUT GET_COUNTERS from a Milan 1.2 entity
+/// (Milan 1.2 §5.3.7.7).
+public struct StreamOutputCounterValidFlagsMilan12: OptionSet, Sendable, Hashable {
+  public let rawValue: UInt32
+  public init(rawValue: UInt32) { self.rawValue = rawValue }
+
+  public static let streamStart = StreamOutputCounterValidFlagsMilan12(rawValue: 1 << 0)
+  public static let streamStop = StreamOutputCounterValidFlagsMilan12(rawValue: 1 << 1)
+  public static let mediaReset = StreamOutputCounterValidFlagsMilan12(rawValue: 1 << 2)
+  public static let timestampUncertain = StreamOutputCounterValidFlagsMilan12(rawValue: 1 << 3)
+  public static let framesTx = StreamOutputCounterValidFlagsMilan12(rawValue: 1 << 4)
 }
 
 // MARK: - Milan
