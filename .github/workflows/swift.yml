@@ -6,31 +6,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  darwin:
-    runs-on: macos-26
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: 🔍 Xcode Select
-        run: |
-          # the image ships several Xcode 26.x; mdfind's order is arbitrary, so take the newest
-          XCODE_PATH=`mdfind "kMDItemCFBundleIdentifier == 'com.apple.dt.Xcode' && kMDItemVersion = '26.*'" -onlyin /Applications \
-            | while read -r app; do echo "$(mdls -name kMDItemVersion -raw "$app") $app"; done | sort -V | tail -1 | cut -d' ' -f2-`
-          [ -z "$XCODE_PATH" ] && echo "Xcode not found — update version filter" && exit 1
-          echo "DEVELOPER_DIR=$XCODE_PATH/Contents/Developer" >> $GITHUB_ENV
-      - name: Fix permissions
-        run: chown -R $(id -u):$(id -g) $PWD
-      - name: Checkout submodules
-        run: |
-          git submodule init && git submodule update
-          (cd Sources/CxxAVDECC/avdecc && git submodule init && git submodule update)
-      - name: Version
-        run: swift --version
-      - name: Build
-        run: swift build
-      - name: Test
-        run: swift test
-
   linux:
     runs-on: ubuntu-24.04
     container: swift:6.3
@@ -40,13 +15,9 @@ jobs:
       - name: Packages
         run: |
           apt-get update
-          apt-get install -y libpcap-dev
+          apt-get install -y liburing-dev
       - name: Fix permissions
         run: chown -R $(id -u):$(id -g) $PWD
-      - name: Checkout submodules
-        run: |
-          git submodule init && git submodule update
-          (cd Sources/CxxAVDECC/avdecc && git submodule init && git submodule update)
       - name: Version
         run: swift --version
       - name: Build

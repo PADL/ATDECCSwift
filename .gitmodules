@@ -1,3 +1,0 @@
-[submodule "Sources/CxxAVDECC/avdecc"]
-	path = Sources/CxxAVDECC/avdecc
-	url = https://github.com/PADL/avdecc.git

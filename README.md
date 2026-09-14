@@ -1,100 +1,115 @@
-# AVDECCSwift
+# ATDECCSwift
 
-Async Swift wrapper around the L-Acoustics [AVDECC library](https://github.com/L-Acoustics/avdecc) (`la_avdecc`), an
-implementation of IEEE 1722.1 (AVDECC) and the Milan Vendor Unique extensions.
+A pure Swift implementation of [IEEE 1722.1-2021](https://standards.ieee.org/ieee/1722.1/6900/)
+(ATDECC, formerly AVDECC) and the Milan Vendor Unique extensions, sending and receiving PDUs
+directly on raw Ethernet.
+
+ATDECCSwift was previously AVDECCSwift, a wrapper around the L-Acoustics
+[la_avdecc](https://github.com/L-Acoustics/avdecc) C++ library. It no longer depends on
+la_avdecc, although its wire behaviour (timeouts, retries, tolerance of non-conforming
+entities, which responses raise notifications) deliberately matches it.
 
 ## Status
 
-- Built on **Swift 6.3 C++ interop** — talks to la_avdecc 4.3.x directly,
-  no C-bindings layer.
-- Linux + macOS targets.
-- Controller-flavour `LocalEntity` only (no talker/listener entity
-  publishing yet).
+- Linux only. Frames are sent and received with `AF_PACKET` sockets driven by io_uring
+  ([IORingSwift](https://github.com/PADL/IORingSwift)).
+- ATDECC Controller role. The codecs encode and decode commands and responses in both
+  directions, so an entity (talker/listener) responder can be added later.
+- Swift 6 strict concurrency: `EndStation` and `Controller` are actors.
 
 ## Capabilities
 
 | Surface | Status |
 |---|---|
-| Network discovery (`ProtocolInterface`, `ProtocolInterfaceObserver`) | ✓ |
-| Controller commands (AEM, MVU, ACMP) | ✓ except `get/setControlValues`, `addressAccess`, `getDynamicInfo` |
-| Change notifications (`LocalEntityDelegate`) | ✓ |
-| Raw PDU send (`sendAdpMessage` / `sendAecpMessage` / `sendAcmpMessage`) | ✓ |
-| Logger bridge to [swift-log](https://github.com/apple/swift-log) | ✓ |
-| Talker / listener entity publishing | ✗ |
+| ADP discovery (§6.2.6) and controller advertising (§6.2.4) | ✓ |
+| AEM commands (§7.4) | ✓ acquire/lock, entity/controller available, READ_DESCRIPTOR, configuration, stream format/info, names, association, sampling rate, clock source, controls, start/stop streaming, unsolicited notifications, AVB info, AS path, counters, reboot, audio maps, operations, memory object length, max transit time |
+| AEM descriptors (§7.2) | ✓ entity, configuration, audio unit, stream, jack, AVB interface, clock source, memory object, locale, strings, stream/external/internal port, audio cluster, audio map, control, clock domain, timing, PTP instance, PTP port |
+| Milan MVU commands | ✓ GET_MILAN_INFO, system unique ID, media clock reference info, BIND_STREAM, UNBIND_STREAM, GET_STREAM_INPUT_INFO_EX |
+| ACMP controller commands and sniffing (§8.2) | ✓ |
+| Unsolicited notifications as events (§7.5.2) | ✓ |
+| Raw PDU send | ✓ |
+| Not yet | WRITE_DESCRIPTOR, video/sensor formats and maps, signal selectors/mixers/matrices, authentication and security, GET_DYNAMIC_INFO, address access, entity responder, serial transport |
 
 ## Quick taste
 
 ```swift
-import AVDECCSwift
+import ATDECC
 
-let pi = try ProtocolInterface(type: .pCap, interfaceID: "eth0")
-let entity = try LocalEntity(
-    protocolInterface: pi,
-    entityID: try pi.getDynamicEID()
+let endStation = try EndStation(port: EthernetPort(interfaceName: "eth0"))
+let controller = try await Controller(
+  endStation: endStation,
+  entityID: endStation.makeDynamicEntityID()
 )
 
-// Discover remote entities and read their entity descriptors.
-final class Spy: ProtocolInterfaceObserver {
-    func onRemoteEntityOnline(_ pi: ProtocolInterface, entity: Entity) {
-        Task {
-            let desc = try? await entity.readEntityDescriptor(id: entity.entityID)
-            print(desc as Any)
-        }
-    }
+for await event in await controller.events() {
+  if case let .entityOnline(id) = event {
+    let descriptor = try await controller.readEntityDescriptor(id: id)
+    print(descriptor.entityName)
+  }
 }
-let spy = Spy()
-pi.observer = spy
 ```
 
 See `Examples/Discovery/Discovery.swift` for a complete, runnable example.
 
-## Building
-
-The wrapper depends on a pre-built la_avdecc binary distributed as a
-[SwiftPM artifact bundle](https://www.swift.org/documentation/articles/distributing-binary-frameworks-as-swift-packages.html).
-The bundle ships in this repository as `avdecc.artifactbundle.zip`.
-
-To rebuild it from the la_avdecc submodule:
-
-```sh
-git submodule update --init --recursive
-./build-artifacts.sh
-```
-
-That script invokes `gen_cmake.sh` inside `Sources/CxxAVDECC/avdecc`,
-runs `make -j9`, and zips the result back into
-`avdecc.artifactbundle.zip`.
-
 ## Architecture
 
-la_avdecc's public surface uses several patterns Swift's C++ importer
-can't see directly: `std::function<…>`-typed callbacks, move-only
-`std::unique_ptr` factories with custom deleters, templated `Subject<>`
-observer machinery, `std::map<>` parameters, exceptions, and a
-namespace named `protocol` (collides with a Swift keyword).
+The names follow IEEE 1722.1-2021:
 
-We bridge those gaps with a small C++ layer in
-`Sources/CxxAVDECC/include/AVDECCSwiftHelpers.hpp`:
+- **`NetworkPort`** — a protocol for the link AVTP frames travel on. `EthernetPort` joins the
+  AVDECC multicast groups (rather than going promiscuous, so it works behind bridges that
+  filter multicast in hardware); `VirtualPort` connects ports on an in-memory
+  `VirtualNetwork` for tests and simulation.
+- **`EndStation<Port>`** — an ATDECC End Station: owns a port, dispatches received PDUs to
+  its entities, and issues dynamic entity IDs.
+- **`Controller<Port>`** — an ATDECC Controller entity. It runs a Discovery state machine,
+  the AEM and ACMP controller state machines (250 ms AECP timeout with one retry and
+  IN_PROGRESS handling, per-command ACMP timeouts from Table 8-1), and reports discovery,
+  unsolicited notifications and sniffed ACMP traffic as `ControllerEvent`s.
+- **Codecs** — `AvdeccPdu` (`Adpdu`, `Aecpdu`, `Acmpdu`), `AemCommandPayload` /
+  `AemResponsePayload`, `MvuCommandPayload` / `MvuResponsePayload` and `Descriptor` are enums
+  parsed with [swift-binary-parsing](https://github.com/apple/swift-binary-parsing) and
+  serialized with the `SerDes` protocols from [IEEE802Swift](https://github.com/PADL/IEEE802Swift).
 
-- `ExecutorOwner`, `LoggerOwner`, `ProtocolInterfaceOwner`,
-  `LocalEntityOwner` — refcounted owners exposed to Swift via
-  `SWIFT_SHARED_REFERENCE`, so Swift ARC drives lifetime.
-- Clang blocks (`-fblocks`) bridge Swift closures into the
-  `std::function` callback slots la_avdecc expects.
-- `BlockProtocolInterfaceObserver` and `BlockControllerDelegate` adapt
-  la_avdecc's observer / delegate virtuals to swappable Block<> slots,
-  guarded by a slots-mutex.
-- C++ exceptions are caught at the boundary and reported as a
-  `CapturedException` value (typed code + `what()` text).
-- la_avdecc PDU types (`Adpdu` / `Aecpdu` / `Acmpdu`) are reachable from
-  Swift through opaque `void const*` pointers plus free
-  `aecpdu_get*` / `acmpdu_get*` accessors that `static_cast` back to
-  the typed pointer.
+Controllers and end stations are generic over their port type, so frames are handled without
+existential dispatch.
 
-All the shaping that's awkward across the boundary (variant `std::optional<>`
-arguments, `std::chrono::*` durations, `std::vector` payloads) is flattened
-to scalar pairs in the helper layer.
+## Migrating from AVDECCSwift
+
+| AVDECCSwift | ATDECC |
+|---|---|
+| `import AVDECCSwift` | `import ATDECC` |
+| `ProtocolInterface(type: .pCap, interfaceID:)` | `EndStation(port: EthernetPort(interfaceName:))` |
+| `ProtocolInterface.getDynamicEID()` / `releaseDynamicEID(_:)` | `EndStation.makeDynamicEntityID()` / `releaseDynamicEntityID(_:)` |
+| `LocalEntity(protocolInterface:entityID:)` | `Controller(endStation:entityID:)` (async) |
+| `LocalEntityDelegate`, `LocalEntityEventStream`, `ProtocolInterfaceObserver` | `Controller.events()` |
+| `onRemoteEntityOnline(_:entity:)` | `ControllerEvent.entityOnline` and `Controller.discoveredEntity(id:)` |
+| `LocalEntityEvent` | `ControllerEvent` |
+| `LocalEntityAemCommandStatus`, `LocalEntityControlStatus`, `LocalEntityMvuCommandStatus` | `AemStatus`, `AcmpStatus`, `MvuStatus` |
+| `setStreamInputInfo(id:streamIndex:info:)` and other setters | `setStreamInputInfo(id:streamIndex:to:)` — setters take the new value as `to:` |
+| `acquireEntity(… descriptorType: UInt16 …)` | `descriptorType: DescriptorType` |
+| `discoverRemoteEntity(id:)`, `enableEntityAdvertising`, `close()` | now `async` |
+| `Executor`, `AVDECCSwift.Logger` | removed; pass a swift-log `Logger` to `EndStation` or `Controller` |
+
+## Building
+
+Requires Swift 6.2 or later on Linux, with `liburing` installed (`apt install liburing-dev`).
+
+```sh
+swift build
+swift test
+```
+
+The tests run controllers against a simulated entity on a `VirtualNetwork` and need no network
+access or privileges.
+
+Sending and receiving raw Ethernet needs `CAP_NET_RAW`. Either run as root, or grant the
+capability to the binary:
+
+```sh
+sudo setcap cap_net_raw+ep .build/debug/avdecc-discovery
+.build/debug/avdecc-discovery eth0
+```
 
 ## License
 
-LGPL-3.0 (matching la_avdecc).
+Apache License 2.0; see `LICENSE`.
