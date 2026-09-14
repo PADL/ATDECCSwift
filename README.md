@@ -94,7 +94,13 @@ existential dispatch.
 
 ## Building
 
-Requires Swift 6.2 or later on Linux, with `liburing` installed (`apt install liburing-dev`).
+Requires Swift 6.2 or later on Linux, with `liburing` and, for link state monitoring through
+[NetLinkSwift](https://github.com/PADL/NetLinkSwift), `libnl` installed:
+
+```sh
+apt install liburing-dev pkg-config libnl-3-dev libnl-route-3-dev libnl-nf-3-dev libnl-genl-3-dev \
+  libmnl-dev libnftnl-dev
+```
 
 ```sh
 swift build

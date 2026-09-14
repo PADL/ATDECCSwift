@@ -206,9 +206,13 @@ private func first(
   }
 }
 
+private struct ReceiveFailure: Error {}
+
 final class ControllerTests: XCTestCase {
   private var network: VirtualNetwork!
   private var entity: FakeEntity!
+  /// The port of the controller made by `makeController()`.
+  private var controllerPort: VirtualPort!
 
   override func setUp() async throws {
     network = VirtualNetwork()
@@ -221,7 +225,8 @@ final class ControllerTests: XCTestCase {
 
   /// A controller that has discovered the fake entity.
   private func makeController() async throws -> Controller<VirtualPort> {
-    let endStation = EndStation(port: network.makePort(macAddress: controllerMacAddress))
+    controllerPort = network.makePort(macAddress: controllerMacAddress)
+    let endStation = EndStation(port: controllerPort)
     let controller = try await Controller(endStation: endStation, entityID: controllerEntityID)
     let online = await first(await controller.events()) {
       if case .entityOnline(entityID) = $0 { true } else { false }
@@ -434,6 +439,78 @@ final class ControllerTests: XCTestCase {
     let advertisements = entity.receivedCount(where: isAvailable)
     try await Task.sleep(for: .milliseconds(1500))
     XCTAssertEqual(entity.receivedCount(where: isAvailable), advertisements)
+    await controller.close()
+  }
+
+  func testAdvertisesWhenLinkComesUp() async throws {
+    let port = network.makePort(macAddress: controllerMacAddress)
+    let controller = try await Controller(endStation: EndStation(port: port), entityID: controllerEntityID)
+    try await controller.enableEntityAdvertising(availableDuration: .seconds(2))
+    let isAvailable: (AvdeccPdu) -> Bool = {
+      if case let .adp(adpdu) = $0 { adpdu.messageType == .entityAvailable && adpdu.entityID == controllerEntityID } else { false }
+    }
+    // the first advertisement follows a random delay of up to 400 ms
+    let first = await entity.firstReceived(where: isAvailable)
+    XCTAssertNotNil(first)
+    let advertisements = entity.receivedCount(where: isAvailable)
+
+    port.setLinkUp(false)
+    try await Task.sleep(for: .milliseconds(20))
+    port.setLinkUp(true)
+    // the next reannouncement is not due for at least a second; link up advertises within 400 ms
+    try await Task.sleep(for: .milliseconds(600))
+    XCTAssertGreaterThan(entity.receivedCount(where: isAvailable), advertisements)
+    await controller.close()
+  }
+
+  // MARK: - Recovery
+
+  func testReceptionRecoversAfterReceiveFailure() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    controllerPort.failReceive(with: ReceiveFailure())
+    let transportError = await first(events) {
+      if case .transportError = $0 { true } else { false }
+    }
+    XCTAssertNotNil(transportError)
+    // frames arriving after the failure are handled
+    let descriptor = try await controller.readEntityDescriptor(id: entityID)
+    XCTAssertEqual(descriptor.entityID, entityID)
+    await controller.close()
+  }
+
+  func testReceptionRecoversAfterReceiveEnds() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    controllerPort.finishReceive()
+    let transportError = await first(events) {
+      if case .transportError = $0 { true } else { false }
+    }
+    XCTAssertNotNil(transportError)
+    let descriptor = try await controller.readEntityDescriptor(id: entityID)
+    XCTAssertEqual(descriptor.entityID, entityID)
+    await controller.close()
+  }
+
+  func testReceivesOnlyWhileLinkIsUp() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    let transportErrors = Mutex(0)
+    let counting = Task {
+      for await event in events {
+        if case .transportError = event { transportErrors.withLock { $0 += 1 } }
+      }
+    }
+    defer { counting.cancel() }
+
+    // a port whose link is down fails to receive at once; the end station does not keep trying
+    controllerPort.setLinkUp(false)
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertLessThanOrEqual(transportErrors.withLock { $0 }, 1)
+
+    controllerPort.setLinkUp(true)
+    let descriptor = try await controller.readEntityDescriptor(id: entityID)
+    XCTAssertEqual(descriptor.entityID, entityID)
     await controller.close()
   }
 

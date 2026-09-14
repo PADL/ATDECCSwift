@@ -170,6 +170,7 @@ public actor Controller<Port: NetworkPort> {
   // advertisements are sent in turn, so that ENTITY_DEPARTING follows any ENTITY_AVAILABLE
   private var _advertisementSend: Task<(), Never>?
   private var _availableIndex = UInt32(0)
+  private var _lastLinkIsUp = false
   private var _isClosed = false
 
   /// Creates a controller entity with `entityID` on `endStation`, and sends ENTITY_DISCOVER
@@ -359,6 +360,15 @@ public actor Controller<Port: NetworkPort> {
   }
 
   // MARK: - Advertising
+
+  /// Advertises again, after the random delay, when the link comes up (lastLinkIsUp in IEEE
+  /// 1722.1-2021 Figure 6-5).
+  func _handleLinkState(isUp: Bool) {
+    guard isUp != _lastLinkIsUp else { return }
+    _lastLinkIsUp = isUp
+    guard isUp, !_isClosed, let advertising = _advertising else { return }
+    advertising.timer.start(interval: _randomAdvertisingDelay(validTime: advertising.validTime))
+  }
 
   /// Advertises this controller with ENTITY_AVAILABLE (IEEE 1722.1-2021 §6.2.4), declaring it
   /// available for `availableDuration` (2 to 62 seconds) after each advertisement.

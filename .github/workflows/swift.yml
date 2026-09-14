@@ -18,7 +18,8 @@ jobs:
       - name: Packages
         run: |
           apt-get update
-          apt-get install -y liburing-dev
+          apt-get install -y liburing-dev pkg-config libnl-3-dev libnl-route-3-dev libnl-nf-3-dev \
+            libnl-genl-3-dev libmnl-dev libnftnl-dev
       - name: Fix permissions
         run: chown -R $(id -u):$(id -g) $PWD
       - name: Version
