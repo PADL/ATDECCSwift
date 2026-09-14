@@ -423,6 +423,12 @@ public struct StreamDescriptor: Sendable, Hashable, CustomStringConvertible {
     if Int(formatsOffset) - input.startPosition >= Self.redundancyFieldsLength {
       let redundantOffset = try UInt16(parsingBigEndian: &input)
       let numberOfRedundantStreams = try UInt16(parsingBigEndian: &input)
+      // as la_avdecc does, reject formats that run into the redundant streams following them
+      if redundantOffset >= formatsOffset,
+         Int(numberOfFormats) * MemoryLayout<UInt64>.size > Int(redundantOffset - formatsOffset)
+      {
+        throw AvdeccCodecError.invalidOffset(Int(redundantOffset))
+      }
       var redundant = try input.seeking(toAbsoluteOffset: input.descriptorOffset(redundantOffset))
       try redundant.requireRemaining(numberOfRedundantStreams, of: MemoryLayout<UInt16>.size)
       redundantStreams = try (0..<numberOfRedundantStreams).map { _ in

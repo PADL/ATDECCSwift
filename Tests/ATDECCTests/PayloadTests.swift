@@ -138,6 +138,39 @@ final class PayloadTests: XCTestCase {
     XCTAssertEqual(context.bytes, bytes)
   }
 
+  private func redundantStreamDescriptor(redundantOffset: UInt16) -> [UInt8] {
+    var body = fixedString("Input 1") + be16(0xFFFF) + be16(0) // name, localized, clock domain
+    body += be16(0x0002) + be64(0x0205_0220_0040_6000) // stream_flags CLASS_A, current_format
+    body += be16(136) + be16(2) // formats_offset, number_of_formats
+    body += [UInt8](repeating: 0, count: 40) // backup talkers and backedup talker
+    body += be16(0) + be32(2_000_000) // avb_interface_index, buffer_length
+    body += be16(redundantOffset) + be16(1) // redundant_offset, number_of_redundant_streams
+    return be16(0x0005) + be16(0) + body + // STREAM_INPUT 0
+      be64(0x0205_0220_0040_6000) + be64(0x00A0_0208_4000_0800) + be16(1)
+  }
+
+  func testStreamDescriptorRedundantStreams() throws {
+    // two formats at 136..<152, then the redundant stream index at 152
+    let bytes = redundantStreamDescriptor(redundantOffset: 152)
+    let (_, _, descriptor) = try readDescriptorResponse(bytes)
+    guard case let .streamInput(stream) = descriptor else {
+      return XCTFail("expected STREAM_INPUT")
+    }
+    XCTAssertEqual(stream.formats.map(\.format), [0x0205_0220_0040_6000, 0x00A0_0208_4000_0800])
+    XCTAssertEqual(stream.redundantStreams, [1])
+
+    var context = SerializationContext()
+    try descriptor.serialize(descriptorIndex: 0, into: &context)
+    XCTAssertEqual(context.bytes, bytes)
+  }
+
+  func testStreamDescriptorFormatsOverlappingRedundantStreamsRejected() {
+    // redundant_offset 144 falls inside the formats at 136..<152
+    XCTAssertThrowsError(try readDescriptorResponse(redundantStreamDescriptor(redundantOffset: 144))) {
+      XCTAssertEqual($0 as? AvdeccCodecError, .invalidOffset(144))
+    }
+  }
+
   func testDescriptorOffsetIntoFixedFieldsRejected() {
     let bytes = be16(DescriptorType.audioMap.rawValue) + be16(0) + be16(2) + be16(1) +
       [0, 0, 0, 1, 0, 0, 0, 1]
