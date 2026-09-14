@@ -8,7 +8,10 @@ on:
 jobs:
   linux:
     runs-on: ubuntu-24.04
-    container: swift:6.3
+    container:
+      image: swift:6.3
+      # Docker's default seccomp profile blocks io_uring, which the serial port tests use
+      options: --security-opt seccomp=unconfined
     steps:
       - name: Checkout
         uses: actions/checkout@v4
