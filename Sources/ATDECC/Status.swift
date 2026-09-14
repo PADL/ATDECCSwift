@@ -66,6 +66,8 @@ public enum AcmpStatus: UInt16, Error {
   case listenerMisbehaving = 14
   case controllerNotAuthorized = 16
   case incompatibleRequest = 17
+  case listenerInvalidConnection = 18
+  case listenerCanOnlyListenOnce = 19
   case notSupported = 31
   case baseProtocolViolation = 991
   case networkError = 995

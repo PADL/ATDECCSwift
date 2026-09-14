@@ -189,7 +189,7 @@ public actor EndStation<Port: NetworkPort> {
     switch pdu {
     case let .adp(adpdu):
       // our own entities' advertisements are not discoveries
-      guard adpdu.messageType == .entityDiscover || _controllers[adpdu.entityID] == nil
+      guard adpdu.messageType == .entityDiscover || _controllers[adpdu.entityID]?.controller == nil
       else { return }
       for controller in _liveControllers {
         await controller._handle(adpdu, from: packet.sourceMacAddress)

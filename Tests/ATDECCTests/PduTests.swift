@@ -147,3 +147,25 @@ final class PduTests: XCTestCase {
     XCTAssertEqual(try parse(bytes), .aecp(.mvu(mvu)))
   }
 }
+
+extension PduTests {
+  func testAemControllerRequestFlag() throws {
+    var aem = AemAecpdu(
+      isResponse: true,
+      targetEntityID: UniqueIdentifier(1),
+      controllerEntityID: UniqueIdentifier(2),
+      unsolicited: true,
+      commandType: .setName
+    )
+    aem.controllerRequest = true
+    let bytes = try AvdeccPdu.aecp(.aem(aem)).serialized()
+    // u, cr and the 14-bit command_type follow the AVTP control header, controller_entity_id and
+    // sequence_id (IEEE 1722.1-2021 §9.3.2)
+    XCTAssertEqual(Array(bytes[22..<24]), [0xC0, 0x10])
+
+    guard case let .aecp(.aem(parsed)) = try parse(bytes) else { return XCTFail("not an AEM AECPDU") }
+    XCTAssertEqual(parsed.commandType, .setName)
+    XCTAssertTrue(parsed.unsolicited)
+    XCTAssertTrue(parsed.controllerRequest)
+  }
+}

@@ -25,6 +25,8 @@
 /// between other controllers, talkers and listeners (IEEE 1722.1-2021 §8.2).
 public enum ControllerEvent: Sendable {
   case transportError
+  /// Entities advertising GENERAL_CONTROLLER_IGNORE (IEEE 1722.1-2021 Table 6-2) are
+  /// reported too; a general-purpose controller should not present them.
   case entityOnline(UniqueIdentifier)
   case entityUpdated(UniqueIdentifier)
   case entityOffline(UniqueIdentifier)

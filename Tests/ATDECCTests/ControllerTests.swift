@@ -60,6 +60,8 @@ private final class FakeEntity: Sendable {
 
   let port: VirtualPort
   let behaviour = Mutex(Behaviour())
+  /// Every PDU received, in order.
+  let received = Mutex([AvdeccPdu]())
   private let _availableIndex = Mutex(UInt32(0))
   private let _task = Mutex<Task<(), Never>?>(nil)
 
@@ -115,10 +117,30 @@ private final class FakeEntity: Sendable {
     ))), to: controllerMacAddress)
   }
 
+  /// Returns the first PDU received that matches `predicate`, waiting up to `timeout`.
+  func firstReceived(
+    timeout: Duration = .seconds(2),
+    where predicate: (AvdeccPdu) -> Bool
+  ) async -> AvdeccPdu? {
+    let deadline = ContinuousClock.now + timeout
+    repeat {
+      if let pdu = received.withLock({ $0.first(where: predicate) }) {
+        return pdu
+      }
+      try? await Task.sleep(for: .milliseconds(10))
+    } while ContinuousClock.now < deadline
+    return nil
+  }
+
+  func receivedCount(where predicate: (AvdeccPdu) -> Bool) -> Int {
+    received.withLock { $0.count(where: predicate) }
+  }
+
   private func _handle(_ packet: IEEE802Packet) async {
     guard let pdu = try? packet.payload.withParserSpan({ try AvdeccPdu(parsing: &$0) }) else {
       return
     }
+    received.withLock { $0.append(pdu) }
     switch pdu {
     case let .adp(adpdu) where adpdu.messageType == .entityDiscover:
       try? await advertise()
@@ -319,6 +341,52 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  func testCancelledCommandIsNotRetried() async throws {
+    let controller = try await makeController()
+    entity.behaviour.withLock { $0.commandsToDrop = 2 }
+    let command = Task {
+      try await controller.registerUnsolicitedNotifications(id: entityID)
+    }
+    try await Task.sleep(for: .milliseconds(50))
+    command.cancel()
+    _ = await command.result
+    // well past the 250 ms timeout at which the command would have been retried
+    try await Task.sleep(for: .milliseconds(400))
+    let sent = entity.receivedCount {
+      if case let .aecp(.aem(aem)) = $0 { aem.commandType == .registerUnsolicitedNotification } else { false }
+    }
+    XCTAssertEqual(sent, 1)
+    await controller.close()
+  }
+
+  func testAnswersCommandsToController() async throws {
+    let controller = try await makeController()
+    let commands: [(sequenceID: UInt16, commandType: AemCommandType, status: AemStatus)] = [
+      (1, .controllerAvailable, .success),
+      (2, .readDescriptor, .notImplemented),
+    ]
+    for command in commands {
+      try await entity.send(.aecp(.aem(AemAecpdu(
+        isResponse: false,
+        targetEntityID: controllerEntityID,
+        controllerEntityID: entityID,
+        sequenceID: command.sequenceID,
+        commandType: command.commandType
+      ))), to: controllerMacAddress)
+      let response = await entity.firstReceived {
+        if case let .aecp(.aem(aem)) = $0 { aem.isResponse && aem.sequenceID == command.sequenceID } else { false }
+      }
+      guard case let .aecp(.aem(aem)) = response else {
+        XCTFail("no response to \(command.commandType)")
+        continue
+      }
+      XCTAssertEqual(aem.commandType, command.commandType)
+      XCTAssertEqual(aem.targetEntityID, controllerEntityID)
+      XCTAssertEqual(aem.status, UInt8(command.status.rawValue))
+    }
+    await controller.close()
+  }
+
   func testUnsolicitedStreamFormatChange() async throws {
     let controller = try await makeController()
     let events = await controller.events()
@@ -335,6 +403,37 @@ final class ControllerTests: XCTestCase {
       }
     }
     XCTAssertNotNil(changed)
+    await controller.close()
+  }
+
+  // MARK: - Advertising
+
+  func testAdvertisingAndDeparting() async throws {
+    let controller = try await makeController()
+    try await controller.enableEntityAdvertising(availableDuration: .seconds(2))
+    let available = await entity.firstReceived {
+      if case let .adp(adpdu) = $0 { adpdu.messageType == .entityAvailable && adpdu.entityID == controllerEntityID } else { false }
+    }
+    guard case let .adp(availableAdpdu) = available else { return XCTFail("controller not advertised") }
+    XCTAssertEqual(availableAdpdu.validTime, 1)
+    XCTAssertEqual(availableAdpdu.availableIndex, 0)
+
+    await controller.disableEntityAdvertising()
+    let departing = await entity.firstReceived {
+      if case let .adp(adpdu) = $0 { adpdu.messageType == .entityDeparting && adpdu.entityID == controllerEntityID } else { false }
+    }
+    guard case let .adp(departingAdpdu) = departing else { return XCTFail("no ENTITY_DEPARTING") }
+    // IEEE 1722.1-2021 §6.2.2.5, §6.2.2.15
+    XCTAssertEqual(departingAdpdu.validTime, 0)
+    XCTAssertEqual(departingAdpdu.availableIndex, 0)
+
+    // nothing is advertised after departing, past the reannounce interval
+    let isAvailable: (AvdeccPdu) -> Bool = {
+      if case let .adp(adpdu) = $0 { adpdu.messageType == .entityAvailable && adpdu.entityID == controllerEntityID } else { false }
+    }
+    let advertisements = entity.receivedCount(where: isAvailable)
+    try await Task.sleep(for: .milliseconds(1500))
+    XCTAssertEqual(entity.receivedCount(where: isAvailable), advertisements)
     await controller.close()
   }
 

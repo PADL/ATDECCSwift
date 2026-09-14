@@ -45,7 +45,9 @@ public enum AcmpMessageType: UInt8, Sendable {
 
 /// ATDECC Connection Management Protocol Data Unit (IEEE 1722.1-2021 §8.2.1).
 public struct Acmpdu: Sendable, Hashable, CustomStringConvertible {
-  /// control_data_length of an ACMPDU (IEEE 1722.1-2021 §8.2.1.7).
+  /// control_data_length of the ACMPDUs sent (IEEE 1722.1-2021 §8.2.1.6). This is the 2013
+  /// length, without the fields 2021 adds, as la_avdecc sends; longer ACMPDUs are accepted and
+  /// the additional fields ignored.
   public static let length: UInt16 = 44
 
   public var messageType: AcmpMessageType
