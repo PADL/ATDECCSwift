@@ -171,9 +171,12 @@ final class ModelTests: XCTestCase {
   }
 
   func testDefaultMediaClockReferencePriority() {
-    XCTAssertEqual(DefaultMediaClockReferencePriority(0xF8), .default)
-    XCTAssertEqual(DefaultMediaClockReferencePriority(0xFF), .userVariableExternal)
-    XCTAssertEqual(DefaultMediaClockReferencePriority(0x10), .default)
+    // Milan 1.3 §5.4.4.4
+    XCTAssertEqual(DefaultMediaClockReferencePriority.highest.rawValue, 255)
+    XCTAssertEqual(DefaultMediaClockReferencePriority.amplifiers.rawValue, 160)
+    XCTAssertEqual(DefaultMediaClockReferencePriority.default.rawValue, 128)
+    XCTAssertEqual(DefaultMediaClockReferencePriority.lowest.rawValue, 0)
+    XCTAssertNil(DefaultMediaClockReferencePriority(rawValue: 0x10))
   }
 
   func testMediaClockReferenceInfoOptionals() {

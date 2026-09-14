@@ -354,15 +354,24 @@ public struct MilanInfo: Sendable, Hashable {
 /// Media clock reference priority (Milan 1.3 §5.4.4.4).
 public typealias MediaClockReferencePriority = UInt8
 
-/// Default media clock reference priorities (Milan 1.3 §5.4.4.4).
-public enum DefaultMediaClockReferencePriority: UInt8, Sendable {
-  case `default` = 0xF8
-  case userVariableInternal = 0xFE
-  case userVariableExternal = 0xFF
-
-  public init(_ raw: UInt8) {
-    self = Self(rawValue: raw) ?? .default
-  }
+/// Default media clock reference priorities by device category (Milan 1.3 §5.4.4.4). An
+/// entity may report any `MediaClockReferencePriority`, so responses carry the raw value.
+public enum DefaultMediaClockReferencePriority: MediaClockReferencePriority, Sendable {
+  case highest = 255
+  case dedicatedGenerators = 240
+  case matrixMixingDevices = 224
+  case mixingConsoles = 208
+  case stageboxes = 192
+  case processors = 176
+  case amplifiers = 160
+  case recordingDevices = 144
+  /// The priority of an entity that provides no data.
+  case `default` = 128
+  case effectProcessingDevices = 112
+  case wirelessReceivers = 80
+  case microphones = 64
+  case instruments = 48
+  case lowest = 0
 }
 
 /// SET/GET_MEDIA_CLOCK_REFERENCE_INFO fields (Milan 1.3 §5.4.4.4). `nil` means the field is

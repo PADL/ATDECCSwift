@@ -278,13 +278,40 @@ final class PayloadTests: XCTestCase {
     else {
       return XCTFail("expected SET_MEDIA_CLOCK_REFERENCE_INFO")
     }
-    XCTAssertEqual(defaultPriority, .default)
+    XCTAssertEqual(defaultPriority, 128)
     XCTAssertNil(info.userMediaClockPriority)
     XCTAssertEqual(info.mediaClockDomainName, "primary")
   }
 }
 
 extension PayloadTests {
+  func testMediaClockReferenceInfoDefaultPriority() throws {
+    // SET_MEDIA_CLOCK_REFERENCE_INFO with the default priority of an entity providing no data
+    let command = MvuCommandPayload.setMediaClockReferenceInfo(
+      clockDomainIndex: 0,
+      flags: [],
+      defaultPriority: DefaultMediaClockReferencePriority.default.rawValue,
+      userPriority: 0,
+      domainName: ""
+    )
+    // clock_domain_index, flags, reserved, default_media_clock_priority
+    XCTAssertEqual(Array(try command.serialized().prefix(5)), [0x00, 0x00, 0x00, 0x00, 0x80])
+
+    // a priority without a named category (0x9A) is reported as is
+    let data: [UInt8] = [0x00, 0x01, 0x00, 0x00, 0x9A, 0x00] + [0, 0, 0, 0] +
+      [UInt8](repeating: 0, count: AvdeccFixedStringLength)
+    guard case let .getMediaClockReferenceInfo(clockDomainIndex, defaultPriority, _) =
+      try MvuResponsePayload(
+        commandTypeRaw: MvuCommandType.getMediaClockReferenceInfo.rawValue,
+        data: data
+      )
+    else {
+      return XCTFail("expected GET_MEDIA_CLOCK_REFERENCE_INFO")
+    }
+    XCTAssertEqual(clockDomainIndex, 1)
+    XCTAssertEqual(defaultPriority, 0x9A)
+  }
+
   func testRegisterUnsolicitedNotificationFlags() throws {
     let command = AemCommandPayload.registerUnsolicitedNotification(flags: .timeLimited)
     XCTAssertEqual(try command.serialized(), [0x00, 0x00, 0x00, 0x01])

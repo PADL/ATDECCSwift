@@ -2315,7 +2315,7 @@ public extension Controller {
   /// GET_MEDIA_CLOCK_REFERENCE_INFO (Milan 1.3 §5.4.4.5).
   func getMediaClockReferenceInfo(
     id targetEntityID: UniqueIdentifier, clockDomainIndex: UInt16
-  ) async throws -> (defaultPriority: DefaultMediaClockReferencePriority, info: MediaClockReferenceInfo) {
+  ) async throws -> (defaultPriority: MediaClockReferencePriority, info: MediaClockReferenceInfo) {
     guard case let .getMediaClockReferenceInfo(_, defaultPriority, info) =
       try await _mvu(targetEntityID, .getMediaClockReferenceInfo(clockDomainIndex: clockDomainIndex))
     else { throw MvuStatus.protocolError }
@@ -2328,7 +2328,7 @@ public extension Controller {
     id targetEntityID: UniqueIdentifier, clockDomainIndex: UInt16,
     userMediaClockPriority: MediaClockReferencePriority? = nil,
     mediaClockDomainName: String? = nil
-  ) async throws -> (defaultPriority: DefaultMediaClockReferencePriority, info: MediaClockReferenceInfo) {
+  ) async throws -> (defaultPriority: MediaClockReferencePriority, info: MediaClockReferenceInfo) {
     var flags = MediaClockReferenceInfoFlags()
     if userMediaClockPriority != nil { flags.insert(.userMediaClockReferencePriorityValid) }
     if mediaClockDomainName != nil { flags.insert(.mediaClockDomainNameValid) }
