@@ -14,9 +14,10 @@
 // limitations under the License.
 //
 
-import ATDECC
+@testable import ATDECC
 import BinaryParsing
 import IEEE802
+import Logging
 import Synchronization
 import XCTest
 
@@ -56,12 +57,16 @@ private final class FakeEntity: Sendable {
     var commandsToDrop = 0
     var inProgressResponses = 0
     var status = AemStatus.success
+    /// AEM commands are not answered until `releaseHeldResponses()`.
+    var holdResponses = false
+    var dropAcmpCommands = false
   }
 
   let port: VirtualPort
   let behaviour = Mutex(Behaviour())
   /// Every PDU received, in order.
   let received = Mutex([AvdeccPdu]())
+  private let _heldCommands = Mutex([(command: AemAecpdu, source: EUI48)]())
   private let _availableIndex = Mutex(UInt32(0))
   private let _task = Mutex<Task<(), Never>?>(nil)
 
@@ -106,6 +111,23 @@ private final class FakeEntity: Sendable {
     )), to: AvdeccMulticastMacAddress)
   }
 
+  /// As if the entity had rebooted: its next advertisement starts again from available_index 0.
+  func resetAvailableIndex() {
+    _availableIndex.withLock { $0 = 0 }
+  }
+
+  /// Answers the commands held so far, and answers later ones at once.
+  func releaseHeldResponses() async {
+    let held = _heldCommands.withLock { held in
+      behaviour.withLock { $0.holdResponses = false }
+      defer { held = [] }
+      return held
+    }
+    for (command, source) in held {
+      await _handleCommand(command, from: source)
+    }
+  }
+
   func sendUnsolicited(_ commandType: AemCommandType, data: [UInt8]) async throws {
     try await send(.aecp(.aem(AemAecpdu(
       isResponse: true,
@@ -136,6 +158,49 @@ private final class FakeEntity: Sendable {
     received.withLock { $0.count(where: predicate) }
   }
 
+  /// Waits up to `timeout` for `count` PDUs matching `predicate` to have been received.
+  func waitUntilReceived(
+    _ count: Int,
+    timeout: Duration = .seconds(2),
+    where predicate: (AvdeccPdu) -> Bool
+  ) async -> Bool {
+    let deadline = ContinuousClock.now + timeout
+    repeat {
+      if receivedCount(where: predicate) >= count {
+        return true
+      }
+      try? await Task.sleep(for: .milliseconds(5))
+    } while ContinuousClock.now < deadline
+    return false
+  }
+
+  /// The sequence IDs of the REGISTER_UNSOLICITED_NOTIFICATION commands received, in order and
+  /// without retries, which repeat a sequence ID.
+  var registerSequenceIDs: [UInt16] {
+    received.withLock { received in
+      var sequenceIDs = [UInt16]()
+      for case let .aecp(.aem(aem)) in received
+        where !aem.isResponse && aem.commandType == .registerUnsolicitedNotification &&
+        !sequenceIDs.contains(aem.sequenceID)
+      {
+        sequenceIDs.append(aem.sequenceID)
+      }
+      return sequenceIDs
+    }
+  }
+
+  /// Waits up to `timeout` for `count` distinct REGISTER_UNSOLICITED_NOTIFICATION commands.
+  func waitUntilRegistered(_ count: Int, timeout: Duration) async -> Bool {
+    let deadline = ContinuousClock.now + timeout
+    repeat {
+      if registerSequenceIDs.count >= count {
+        return true
+      }
+      try? await Task.sleep(for: .milliseconds(5))
+    } while ContinuousClock.now < deadline
+    return false
+  }
+
   private func _handle(_ packet: IEEE802Packet) async {
     guard let pdu = try? packet.payload.withParserSpan({ try AvdeccPdu(parsing: &$0) }) else {
       return
@@ -147,7 +212,7 @@ private final class FakeEntity: Sendable {
     case let .aecp(.aem(aem)) where !aem.isResponse && aem.targetEntityID == entityID:
       await _handleCommand(aem, from: packet.sourceMacAddress)
     case let .acmp(acmpdu) where acmpdu.messageType == .connectRxCommand &&
-      acmpdu.listenerEntityID == entityID:
+      acmpdu.listenerEntityID == entityID && !behaviour.withLock(\.dropAcmpCommands):
       var response = acmpdu
       response.messageType = .connectRxResponse
       response.connectionCount = 1
@@ -158,6 +223,12 @@ private final class FakeEntity: Sendable {
   }
 
   private func _handleCommand(_ command: AemAecpdu, from source: EUI48) async {
+    let isHeld = _heldCommands.withLock { held in
+      guard behaviour.withLock(\.holdResponses) else { return false }
+      held.append((command: command, source: source))
+      return true
+    }
+    guard !isHeld else { return }
     let (drop, inProgressResponses, status) = behaviour.withLock { behaviour in
       guard behaviour.commandsToDrop == 0 else {
         behaviour.commandsToDrop -= 1
@@ -206,7 +277,40 @@ private func first(
   }
 }
 
+/// The result of `task`, or nil if it does not complete within `timeout`. The wait does not
+/// depend on `task` honouring cancellation.
+private func result<Success: Sendable>(
+  of task: Task<Success, any Error>,
+  within timeout: Duration = .seconds(2)
+) async -> Result<Success, any Error>? {
+  let completion = Mutex<Result<Success, any Error>?>(nil)
+  Task {
+    let result = await task.result
+    completion.withLock { $0 = result }
+  }
+  let deadline = ContinuousClock.now + timeout
+  repeat {
+    if let result = completion.withLock({ $0 }) {
+      return result
+    }
+    try? await Task.sleep(for: .milliseconds(5))
+  } while ContinuousClock.now < deadline
+  return nil
+}
+
 private struct ReceiveFailure: Error {}
+
+private func isCommand(_ commandType: AemCommandType) -> @Sendable (AvdeccPdu) -> Bool {
+  { pdu in
+    if case let .aecp(.aem(aem)) = pdu { !aem.isResponse && aem.commandType == commandType } else { false }
+  }
+}
+
+private let talkerStream = StreamIdentification(
+  entityID: UniqueIdentifier(0x0200_00FF_FE00_0003),
+  streamIndex: 0
+)
+private let listenerStream = StreamIdentification(entityID: entityID, streamIndex: 0)
 
 final class ControllerTests: XCTestCase {
   private var network: VirtualNetwork!
@@ -224,10 +328,16 @@ final class ControllerTests: XCTestCase {
   }
 
   /// A controller that has discovered the fake entity.
-  private func makeController() async throws -> Controller<VirtualPort> {
+  private func makeController(
+    timing: ControllerTiming = ControllerTiming()
+  ) async throws -> Controller<VirtualPort> {
     controllerPort = network.makePort(macAddress: controllerMacAddress)
-    let endStation = EndStation(port: controllerPort)
-    let controller = try await Controller(endStation: endStation, entityID: controllerEntityID)
+    let endStation = EndStation(port: controllerPort, logger: Logger(label: "ControllerTests"))
+    let controller = try await Controller(
+      endStation: endStation,
+      entityID: controllerEntityID,
+      timing: timing
+    )
     let online = await first(await controller.events()) {
       if case .entityOnline(entityID) = $0 { true } else { false }
     }
@@ -481,6 +591,46 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  // MARK: - ACMP
+
+  func testConnectStream() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    let talker = StreamIdentification(entityID: UniqueIdentifier(0x0200_00FF_FE00_0003), streamIndex: 0)
+    let listener = StreamIdentification(entityID: entityID, streamIndex: 0)
+    let state = try await controller.connectStream(talker: talker, listener: listener)
+    XCTAssertEqual(state.talkerStream, talker)
+    XCTAssertEqual(state.listenerStream, listener)
+    XCTAssertEqual(state.connectionCount, 1)
+    // our own controller response is not reported as sniffed
+    let sniffed = await first(events, timeout: .milliseconds(100)) {
+      if case .controllerConnectResponse = $0 { true } else { false }
+    }
+    XCTAssertNil(sniffed)
+    await controller.close()
+  }
+
+  func testSniffedConnectResponse() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    try await entity.send(.acmp(Acmpdu(
+      messageType: .connectRxResponse,
+      controllerEntityID: UniqueIdentifier(0x0200_00FF_FE00_0099),
+      talkerEntityID: UniqueIdentifier(0x0200_00FF_FE00_0003),
+      listenerEntityID: entityID,
+      connectionCount: 1
+    )), to: AvdeccMulticastMacAddress)
+    let sniffed = await first(events) {
+      if case let .controllerConnectResponse(state, .success) = $0 {
+        state.listenerStream.entityID == entityID
+      } else {
+        false
+      }
+    }
+    XCTAssertNotNil(sniffed)
+    await controller.close()
+  }
+
   // MARK: - Recovery
 
   func testReceptionRecoversAfterReceiveFailure() async throws {
@@ -532,43 +682,302 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
-  // MARK: - ACMP
+  // MARK: - Transmission
 
-  func testConnectStream() async throws {
+  func testReceptionContinuesWhileSendIsBlocked() async throws {
     let controller = try await makeController()
     let events = await controller.events()
-    let talker = StreamIdentification(entityID: UniqueIdentifier(0x0200_00FF_FE00_0003), streamIndex: 0)
-    let listener = StreamIdentification(entityID: entityID, streamIndex: 0)
-    let state = try await controller.connectStream(talker: talker, listener: listener)
-    XCTAssertEqual(state.talkerStream, talker)
-    XCTAssertEqual(state.listenerStream, listener)
-    XCTAssertEqual(state.connectionCount, 1)
-    // our own controller response is not reported as sniffed
-    let sniffed = await first(events, timeout: .milliseconds(100)) {
-      if case .controllerConnectResponse = $0 { true } else { false }
+    controllerPort.setSendsBlocked(true)
+    // the controller's response to this command cannot be sent
+    try await entity.send(.aecp(.aem(AemAecpdu(
+      isResponse: false,
+      targetEntityID: controllerEntityID,
+      controllerEntityID: entityID,
+      sequenceID: 1,
+      commandType: .controllerAvailable
+    ))), to: controllerMacAddress)
+    try await entity.advertise(.entityDeparting)
+    let offline = await first(events) {
+      if case .entityOffline(entityID) = $0 { true } else { false }
     }
-    XCTAssertNil(sniffed)
+    XCTAssertNotNil(offline, "ENTITY_DEPARTING not handled while a send was blocked")
+
+    controllerPort.setSendsBlocked(false)
+    let response = await entity.firstReceived {
+      if case let .aecp(.aem(aem)) = $0 { aem.isResponse && aem.commandType == .controllerAvailable } else { false }
+    }
+    XCTAssertNotNil(response)
     await controller.close()
   }
 
-  func testSniffedConnectResponse() async throws {
+  func testCancellingAecpCommandDuringSend() async throws {
     let controller = try await makeController()
-    let events = await controller.events()
-    try await entity.send(.acmp(Acmpdu(
-      messageType: .connectRxResponse,
-      controllerEntityID: UniqueIdentifier(0x0200_00FF_FE00_0099),
-      talkerEntityID: UniqueIdentifier(0x0200_00FF_FE00_0003),
-      listenerEntityID: entityID,
-      connectionCount: 1
-    )), to: AvdeccMulticastMacAddress)
-    let sniffed = await first(events) {
-      if case let .controllerConnectResponse(state, .success) = $0 {
-        state.listenerStream.entityID == entityID
-      } else {
-        false
+    controllerPort.setSendsBlocked(true)
+    // the first command's send is blocked; the second waits to be sent after it
+    let sending = Task {
+      try await controller.readEntityDescriptor(id: entityID)
+    }
+    try await Task.sleep(for: .milliseconds(20))
+    let waiting = Task {
+      try await controller.lockEntity(id: entityID)
+    }
+    try await Task.sleep(for: .milliseconds(20))
+    sending.cancel()
+    waiting.cancel()
+    switch await result(of: sending) {
+    case .failure(is CancellationError): break
+    case let result: XCTFail("expected CancellationError, got \(String(describing: result))")
+    }
+    switch await result(of: waiting) {
+    case .failure(is CancellationError): break
+    case let result: XCTFail("expected CancellationError, got \(String(describing: result))")
+    }
+
+    // the send in progress completes once sends resume, but the command waiting is not sent
+    controllerPort.setSendsBlocked(false)
+    let sent = await entity.waitUntilReceived(1, where: isCommand(.readDescriptor))
+    XCTAssertTrue(sent)
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(entity.receivedCount(where: isCommand(.lockEntity)), 0)
+    await controller.close()
+  }
+
+  func testCancellingAcmpCommandDuringSend() async throws {
+    let controller = try await makeController()
+    controllerPort.setSendsBlocked(true)
+    let command = Task {
+      try await controller.connectStream(talker: talkerStream, listener: listenerStream)
+    }
+    try await Task.sleep(for: .milliseconds(50))
+    command.cancel()
+    switch await result(of: command) {
+    case .failure(is CancellationError): break
+    case let result: XCTFail("expected CancellationError, got \(String(describing: result))")
+    }
+    controllerPort.setSendsBlocked(false)
+    await controller.close()
+  }
+
+  func testCommandsBeyondInflightLimitAreQueued() async throws {
+    // responses are held for longer than the standard timeout
+    let controller = try await makeController(timing: ControllerTiming(aecpCommandTimeout: .seconds(10)))
+    entity.behaviour.withLock { $0.holdResponses = true }
+    let commandCount = 15
+    let inflightLimit = 10
+    let commands = (0..<commandCount).map { index in
+      Task {
+        try await controller.lockEntity(id: entityID, descriptorIndex: UInt16(index))
       }
     }
-    XCTAssertNotNil(sniffed)
+
+    let isLock = isCommand(.lockEntity)
+    let inflight = await entity.waitUntilReceived(inflightLimit, where: isLock)
+    XCTAssertTrue(inflight)
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(entity.receivedCount(where: isLock), inflightLimit)
+
+    // cancel a command that is still queued
+    let sentIndices = entity.received.withLock { received in
+      Set(received.compactMap { pdu -> Int? in
+        guard case let .aecp(.aem(aem)) = pdu, aem.commandType == .lockEntity else { return nil }
+        // flags, locked_id, descriptor_type, descriptor_index
+        let data = aem.commandSpecificData
+        return Int(data[14]) << 8 | Int(data[15])
+      })
+    }
+    let queuedIndex = try XCTUnwrap((0..<commandCount).first { !sentIndices.contains($0) })
+    commands[queuedIndex].cancel()
+    switch await result(of: commands[queuedIndex]) {
+    case .failure(is CancellationError): break
+    case let result: XCTFail("expected CancellationError, got \(String(describing: result))")
+    }
+
+    // each response lets a queued command through
+    await entity.releaseHeldResponses()
+    for (index, command) in commands.enumerated() where index != queuedIndex {
+      switch await result(of: command) {
+      case .success: break
+      case let result: XCTFail("command \(index): \(String(describing: result))")
+      }
+    }
+    XCTAssertEqual(entity.receivedCount(where: isLock), commandCount - 1)
+    await controller.close()
+  }
+
+  func testCloseFailsPendingCommandsPromptly() async throws {
+    let controller = try await makeController()
+    // closing deregisters, which is sent on a port whose sends are blocked below
+    try await controller.registerUnsolicitedNotifications(id: entityID)
+    entity.behaviour.withLock { behaviour in
+      behaviour.commandsToDrop = .max
+      behaviour.dropAcmpCommands = true
+    }
+    let aecpCommand = Task {
+      try await controller.readEntityDescriptor(id: entityID)
+    }
+    let acmpCommand = Task {
+      try await controller.connectStream(talker: talkerStream, listener: listenerStream)
+    }
+    let aecpSent = await entity.waitUntilReceived(1, where: isCommand(.readDescriptor))
+    let acmpSent = await entity.waitUntilReceived(1) {
+      if case let .acmp(acmpdu) = $0 { acmpdu.messageType == .connectRxCommand } else { false }
+    }
+    XCTAssertTrue(aecpSent && acmpSent)
+
+    controllerPort.setSendsBlocked(true)
+    let closing = Task { () throws in await controller.close() }
+    // well within the AECP command's 250 ms timeout
+    let closeWait = Duration.milliseconds(150)
+    switch await result(of: aecpCommand, within: closeWait) {
+    case .failure(AemStatus.internalError): break
+    case let result: XCTFail("expected internalError, got \(String(describing: result))")
+    }
+    switch await result(of: acmpCommand, within: closeWait) {
+    case .failure(AcmpStatus.internalError): break
+    case let result: XCTFail("expected internalError, got \(String(describing: result))")
+    }
+    let closed = await result(of: closing, within: closeWait)
+    XCTAssertNotNil(closed, "close() waited on a blocked send")
+    controllerPort.setSendsBlocked(false)
+    _ = await result(of: closing)
+  }
+
+  // MARK: - Entity reboot
+
+  private func checkEntityReboot(departing: Bool) async throws {
+    let timing = ControllerTiming(
+      unsolicitedNotificationRenewalInterval: .milliseconds(50),
+      maintenanceInterval: .milliseconds(10)
+    )
+    let controller = try await makeController(timing: timing)
+    let events = await controller.events()
+    try await controller.registerUnsolicitedNotifications(id: entityID)
+
+    entity.behaviour.withLock { $0.commandsToDrop = .max }
+    let inflight = Task {
+      try await controller.readEntityDescriptor(id: entityID)
+    }
+    let sent = await entity.waitUntilReceived(1, where: isCommand(.readDescriptor))
+    XCTAssertTrue(sent)
+
+    if departing {
+      try await entity.advertise(.entityDeparting)
+      let offline = await first(events) {
+        if case .entityOffline(entityID) = $0 { true } else { false }
+      }
+      XCTAssertNotNil(offline)
+    }
+    entity.resetAvailableIndex()
+    entity.behaviour.withLock { $0.commandsToDrop = 0 }
+    try await entity.advertise()
+
+    // the command in flight to the entity that went away fails
+    switch await result(of: inflight) {
+    case .failure(AemStatus.unknownEntity): break
+    case let result: XCTFail("expected unknownEntity, got \(String(describing: result))")
+    }
+    let online = await first(events) {
+      if case .entityOnline(entityID) = $0 { true } else { false }
+    }
+    XCTAssertNotNil(online)
+
+    // its registration went with it, and is no longer renewed
+    let registrations = entity.registerSequenceIDs.count
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertEqual(entity.registerSequenceIDs.count, registrations)
+
+    // the returned entity answers commands, and can be registered with again
+    let descriptor = try await controller.readEntityDescriptor(id: entityID)
+    XCTAssertEqual(descriptor.entityID, entityID)
+    try await controller.registerUnsolicitedNotifications(id: entityID)
+    // and that registration is renewed
+    let renewed = await entity.waitUntilRegistered(registrations + 2, timeout: .seconds(1))
+    XCTAssertTrue(renewed)
+    await controller.close()
+  }
+
+  func testEntityRebootAfterDeparting() async throws {
+    try await checkEntityReboot(departing: true)
+  }
+
+  func testEntityRebootWithoutDeparting() async throws {
+    try await checkEntityReboot(departing: false)
+  }
+
+  // MARK: - Unsolicited notification registrations
+
+  func testUnregisterFromDepartedEntity() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    try await controller.registerUnsolicitedNotifications(id: entityID)
+    try await entity.advertise(.entityDeparting)
+    let offline = await first(events) {
+      if case .entityOffline(entityID) = $0 { true } else { false }
+    }
+    XCTAssertNotNil(offline)
+    // the registration went with the entity: there is nothing to deregister
+    try await controller.unregisterUnsolicitedNotifications(id: entityID)
+    XCTAssertEqual(entity.receivedCount(where: isCommand(.deregisterUnsolicitedNotification)), 0)
+    await controller.close()
+  }
+
+  func testFailedRenewalIsRetriedSoon() async throws {
+    let timing = ControllerTiming(
+      aecpCommandTimeout: .milliseconds(50),
+      unsolicitedNotificationRenewalInterval: .milliseconds(600),
+      unsolicitedNotificationRetryDelay: .milliseconds(10)...(.milliseconds(40)),
+      maintenanceInterval: .milliseconds(10)
+    )
+    let controller = try await makeController(timing: timing)
+    try await controller.registerUnsolicitedNotifications(id: entityID)
+    // the renewal, and its retry, go unanswered
+    entity.behaviour.withLock { $0.commandsToDrop = 2 }
+    let renewed = await entity.waitUntilRegistered(2, timeout: .seconds(2))
+    XCTAssertTrue(renewed, "not renewed")
+
+    // the renewal fails after two 50 ms timeouts, and is retried 10 ms later rather than after
+    // the 600 ms renewal interval
+    let retried = await entity.waitUntilRegistered(3, timeout: .milliseconds(400))
+    XCTAssertTrue(retried, "failed renewal not retried soon")
+    await controller.close()
+  }
+
+  func testReregistersAfterUnsolicitedDeregistration() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    try await controller.registerUnsolicitedNotifications(id: entityID)
+    // the entity timed out the registration (IEEE 1722.1-2021 §7.4.37.2)
+    try await entity.sendUnsolicited(.deregisterUnsolicitedNotification, data: [])
+    let deregistered = await first(events) {
+      if case .deregisteredFromUnsolicitedNotifications(entityID) = $0 { true } else { false }
+    }
+    XCTAssertNotNil(deregistered)
+    let registered = await entity.waitUntilRegistered(2, timeout: .seconds(1))
+    XCTAssertTrue(registered, "not registered again")
+    await controller.close()
+  }
+
+  func testRenewalRetryDoesNotFollowUnregister() async throws {
+    let timing = ControllerTiming(
+      unsolicitedNotificationRenewalInterval: .milliseconds(100),
+      maintenanceInterval: .milliseconds(10)
+    )
+    let controller = try await makeController(timing: timing)
+    try await controller.registerUnsolicitedNotifications(id: entityID)
+    // the renewal goes unanswered, so it is retried after the 250 ms AECP timeout
+    entity.behaviour.withLock { $0.commandsToDrop = 1 }
+    let renewed = await entity.waitUntilRegistered(2, timeout: .seconds(2))
+    XCTAssertTrue(renewed, "not renewed")
+
+    try await controller.unregisterUnsolicitedNotifications(id: entityID)
+    try await Task.sleep(for: .milliseconds(400))
+    let isDeregister = isCommand(.deregisterUnsolicitedNotification)
+    let isRegister = isCommand(.registerUnsolicitedNotification)
+    let registeredAfterDeregistering = entity.received.withLock { received in
+      guard let deregister = received.lastIndex(where: isDeregister) else { return false }
+      return received[deregister...].contains(where: isRegister)
+    }
+    XCTAssertFalse(registeredAfterDeregistering)
     await controller.close()
   }
 }

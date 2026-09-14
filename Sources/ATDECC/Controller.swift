@@ -19,10 +19,6 @@ import Logging
 
 // MARK: - Timing
 
-/// Timeout of every AECP command (IEEE 1722.1-2021 §9.3.2.6); an IN_PROGRESS response
-/// restarts it.
-private let _aecpCommandTimeout = Duration.milliseconds(250)
-
 /// Commands in flight to one entity at a time; further commands queue (as la_avdecc does).
 private let _maximumInflightAecpCommands = 10
 
@@ -40,12 +36,21 @@ private func _acmpCommandTimeout(_ messageType: AcmpMessageType) -> Duration {
   }
 }
 
-/// How often a time-limited unsolicited notification registration is renewed (IEEE
-/// 1722.1-2021 §7.4.37.2).
-private let _unsolicitedNotificationRenewalInterval = Duration.seconds(100)
-
-/// How often discovered interfaces' valid times are checked.
-private let _discoveryExpiryInterval = Duration.milliseconds(500)
+/// The timing of a controller's state machines, injectable for tests.
+struct ControllerTiming: Sendable {
+  /// Timeout of every AECP command (IEEE 1722.1-2021 §9.3.2.6); an IN_PROGRESS response
+  /// restarts it.
+  var aecpCommandTimeout = Duration.milliseconds(250)
+  /// How often a time-limited unsolicited notification registration is renewed (IEEE
+  /// 1722.1-2021 §7.4.37.2).
+  var unsolicitedNotificationRenewalInterval = Duration.seconds(100)
+  /// Delays before a failed renewal is retried, doubling from the lower bound; well within the
+  /// entity's 300 second timeout.
+  var unsolicitedNotificationRetryDelay = Duration.seconds(1)...Duration.seconds(30)
+  /// How often discovered interfaces' valid times, and registrations due for renewal, are
+  /// checked.
+  var maintenanceInterval = Duration.milliseconds(500)
+}
 
 /// Advertised available durations (valid_time is in units of 2 seconds).
 private let _availableDurationRange = Duration.seconds(2)...Duration.seconds(62)
@@ -157,7 +162,21 @@ public actor Controller<Port: NetworkPort> {
     /// Whether the entity accepted a time-limited registration, which is renewed; nil until
     /// the entity responds.
     var isTimeLimited: Bool?
-    var lastSent: ContinuousClock.Instant
+    /// When the registration is next renewed, or a failed renewal retried.
+    var renewalTime: ContinuousClock.Instant
+    /// The delay before the last retry of a failed renewal; nil once a renewal succeeds.
+    var retryDelay: Duration?
+    /// The renewal in progress. It is cancelled when the registration is dropped, so that its
+    /// AECP retry cannot register again after a deregistration.
+    var renewal: Task<(), Never>?
+  }
+
+  /// A PDU queued for the transmit task. A command's timeout starts once it has been sent.
+  private enum Transmission: Sendable {
+    case aecpCommand(AecpTransaction)
+    case acmpCommand(AcmpTransaction, sequenceID: UInt16)
+    /// A PDU outside any transaction: a response, an advertisement or a deregistration.
+    case pdu(AvdeccPdu, destination: EUI48)
   }
 
   private struct Advertising: Sendable {
@@ -169,6 +188,7 @@ public actor Controller<Port: NetworkPort> {
   public nonisolated let entityID: UniqueIdentifier
   public nonisolated let endStation: EndStation<Port>
   private nonisolated let _logger: Logger
+  private nonisolated let _timing: ControllerTiming
 
   private var _subscribers = [Int: AsyncStream<ControllerEvent>.Continuation]()
   private var _nextSubscriberID = 0
@@ -181,8 +201,10 @@ public actor Controller<Port: NetworkPort> {
   private var _aecpTargets = [UniqueIdentifier: AecpTarget]()
   private var _acmpTransactions = [UInt16: AcmpTransaction]()
   private var _advertising: Advertising?
-  // advertisements are sent in turn, so that ENTITY_DEPARTING follows any ENTITY_AVAILABLE
-  private var _advertisementSend: Task<(), Never>?
+  // PDUs are sent in turn by one task, so that a slow port holds up transmission, never the
+  // receive path, and so that ENTITY_DEPARTING follows any ENTITY_AVAILABLE
+  private nonisolated let _transmissions: AsyncStream<Transmission>.Continuation
+  private var _transmitTask: Task<(), Never>?
   private var _availableIndex = UInt32(0)
   private var _lastLinkIsUp = false
   private var _unsolicitedNotificationRegistrations = [UniqueIdentifier: UnsolicitedNotificationRegistration]()
@@ -196,19 +218,66 @@ public actor Controller<Port: NetworkPort> {
     entityID: UniqueIdentifier,
     logger: Logger? = nil
   ) async throws {
+    try await self.init(endStation: endStation, entityID: entityID, logger: logger, timing: ControllerTiming())
+  }
+
+  /// `timing` is injectable for tests.
+  init(
+    endStation: EndStation<Port>,
+    entityID: UniqueIdentifier,
+    logger: Logger? = nil,
+    timing: ControllerTiming
+  ) async throws {
     self.endStation = endStation
     self.entityID = entityID
     _logger = logger ?? endStation.logger
+    _timing = timing
+    let transmissions: AsyncStream<Transmission>
+    (transmissions, _transmissions) = AsyncStream.makeStream()
     try await endStation.register(self)
+    _transmitTask = Task { [weak self, endStation, entityID, logger = _logger] in
+      for await transmission in transmissions {
+        switch transmission {
+        case let .aecpCommand(transaction):
+          // a command cancelled, or completed, while it was queued is not sent
+          guard !transaction.promise.isResolved else { continue }
+          do {
+            try await endStation.send(.aecp(transaction.aecpdu), to: transaction.destination)
+            await self?._aecpCommandSent(transaction)
+          } catch {
+            await self?._completeAecpCommand(
+              transaction.aecpdu.targetEntityID,
+              sequenceID: transaction.sequenceID,
+              with: .failure(CommandError.networkError(error))
+            )
+          }
+        case let .acmpCommand(transaction, sequenceID):
+          guard !transaction.promise.isResolved else { continue }
+          do {
+            try await endStation.send(.acmp(transaction.acmpdu), to: AvdeccMulticastMacAddress)
+            await self?._acmpCommandSent(sequenceID: sequenceID, timer: transaction.timer)
+          } catch {
+            await self?._acmpCommandSendFailed(sequenceID: sequenceID, timer: transaction.timer, error: error)
+          }
+        case let .pdu(pdu, destination):
+          do {
+            try await endStation.send(pdu, to: destination)
+          } catch {
+            logger.debug("\(entityID): transmission failed: \(error)")
+          }
+        }
+      }
+    }
     do {
       try await discoverRemoteEntities()
     } catch {
+      _transmissions.finish()
       await endStation.unregister(entityID)
       throw error
     }
-    _maintenanceTask = Task { [weak self] in
+    _maintenanceTask = Task { [weak self, timing] in
       while !Task.isCancelled {
-        try? await Task.sleep(for: _discoveryExpiryInterval)
+        try? await Task.sleep(for: timing.maintenanceInterval)
         await self?._maintainDiscovery()
       }
     }
@@ -217,15 +286,16 @@ public actor Controller<Port: NetworkPort> {
   deinit {
     _maintenanceTask?.cancel()
     _advertising?.timer.stop()
+    _transmissions.finish()
   }
 
   /// Fails pending commands, stops advertising (sending ENTITY_DEPARTING), finishes event
-  /// streams and detaches from the end station. Idempotent.
+  /// streams and detaches from the end station. Idempotent. Closing does not wait for the
+  /// deregistrations and ENTITY_DEPARTING to be sent.
   public func close() async {
     guard !_isClosed else { return }
     _isClosed = true
     _maintenanceTask?.cancel()
-    await _deregisterUnsolicitedNotifications()
 
     for transaction in _aecpTargets.values.flatMap({ $0.inflight + $0.queued }) {
       transaction.timer.stop()
@@ -238,11 +308,14 @@ public actor Controller<Port: NetworkPort> {
     }
     _acmpTransactions = [:]
 
+    _deregisterUnsolicitedNotifications()
     if let advertising = _advertising {
       _advertising = nil
       advertising.timer.stop()
-      await _sendAdvertisement(.entityDeparting, advertising)
+      _sendAdvertisement(.entityDeparting, advertising)
     }
+    // what is already queued is still sent
+    _transmissions.finish()
 
     for continuation in _subscribers.values {
       continuation.finish()
@@ -344,7 +417,7 @@ public actor Controller<Port: NetworkPort> {
         _yield(.entityOffline(entityID))
         _failAecpCommands(towards: entityID)
         // an entity that returns has lost its registrations
-        _unsolicitedNotificationRegistrations[entityID] = nil
+        _dropUnsolicitedNotificationRegistration(entityID)
       }
     }
   }
@@ -362,7 +435,7 @@ public actor Controller<Port: NetworkPort> {
     }
   }
 
-  func _handle(_ adpdu: Adpdu, from sourceMacAddress: EUI48) async {
+  func _handle(_ adpdu: Adpdu, from sourceMacAddress: EUI48) {
     switch adpdu.messageType {
     case .entityAvailable:
       _apply(_discovery.handleEntityAvailable(adpdu, macAddress: sourceMacAddress.bytes))
@@ -414,7 +487,7 @@ public actor Controller<Port: NetworkPort> {
     guard let advertising = _advertising else { return }
     _advertising = nil
     advertising.timer.stop()
-    await _sendAdvertisement(.entityDeparting, advertising)
+    _sendAdvertisement(.entityDeparting, advertising)
   }
 
   /// A uniformly distributed delay of up to a fifth of the valid period, so that entities
@@ -424,17 +497,15 @@ public actor Controller<Port: NetworkPort> {
     return .milliseconds(Int.random(in: 0..<maximum))
   }
 
-  private func _advertise() async {
+  private func _advertise() {
     guard let advertising = _advertising else { return }
-    await _sendAdvertisement(.entityAvailable, advertising)
-    // advertising may have been disabled, or re-enabled with a new timer, during the send
-    guard _advertising?.timer === advertising.timer else { return }
+    _sendAdvertisement(.entityAvailable, advertising)
     // re-advertise after a quarter of the valid period, plus jitter
     let interval = Duration.milliseconds(max(1000, Int(advertising.validTime) * 1000 / 2))
     advertising.timer.start(interval: interval + _randomAdvertisingDelay(validTime: advertising.validTime))
   }
 
-  private func _sendAdvertisement(_ messageType: AdpMessageType, _ advertising: Advertising) async {
+  private func _sendAdvertisement(_ messageType: AdpMessageType, _ advertising: Advertising) {
     // valid_time and available_index are zero except in ENTITY_AVAILABLE, whose available_index
     // increases with each one sent (IEEE 1722.1-2021 §6.2.2.5, §6.2.2.15)
     let isAvailable = messageType == .entityAvailable
@@ -450,18 +521,7 @@ public actor Controller<Port: NetworkPort> {
     if isAvailable {
       _availableIndex &+= 1
     }
-
-    let previousSend = _advertisementSend
-    let send = Task {
-      await previousSend?.value
-      do {
-        try await endStation.send(.adp(adpdu), to: AvdeccMulticastMacAddress)
-      } catch {
-        _logger.debug("\(entityID): advertisement failed: \(error)")
-      }
-    }
-    _advertisementSend = send
-    await send.value
+    _transmissions.yield(.pdu(.adp(adpdu), destination: AvdeccMulticastMacAddress))
   }
 
   // MARK: - Unsolicited notification registrations
@@ -473,9 +533,10 @@ public actor Controller<Port: NetworkPort> {
     let id = _nextUnsolicitedNotificationRegistration
     _nextUnsolicitedNotificationRegistration += 1
     // recorded before sending, so that deregistering during the command supersedes it
+    _dropUnsolicitedNotificationRegistration(targetEntityID)
     _unsolicitedNotificationRegistrations[targetEntityID] = UnsolicitedNotificationRegistration(
       id: id,
-      lastSent: .now
+      renewalTime: .now + _timing.unsolicitedNotificationRenewalInterval
     )
 
     let isTimeLimited: Bool
@@ -489,59 +550,104 @@ public actor Controller<Port: NetworkPort> {
       }
     } catch {
       if _unsolicitedNotificationRegistrations[targetEntityID]?.id == id {
-        _unsolicitedNotificationRegistrations[targetEntityID] = nil
+        _dropUnsolicitedNotificationRegistration(targetEntityID)
       }
       throw error
     }
 
-    guard _unsolicitedNotificationRegistrations[targetEntityID]?.id == id else { return }
-    _unsolicitedNotificationRegistrations[targetEntityID]?.isTimeLimited = isTimeLimited
-    _unsolicitedNotificationRegistrations[targetEntityID]?.lastSent = .now
+    guard var registration = _unsolicitedNotificationRegistrations[targetEntityID],
+          registration.id == id
+    else { return }
+    registration.isTimeLimited = isTimeLimited
+    registration.renewalTime = .now + _timing.unsolicitedNotificationRenewalInterval
+    _unsolicitedNotificationRegistrations[targetEntityID] = registration
   }
 
   private func _deregisterUnsolicitedNotifications(_ targetEntityID: UniqueIdentifier) async throws {
-    _unsolicitedNotificationRegistrations[targetEntityID] = nil
+    _dropUnsolicitedNotificationRegistration(targetEntityID)
+    // an entity that is not discovered holds no registration to remove: it was dropped when
+    // the entity went offline, and there is nowhere to send the command
+    guard _discovery.entity(id: targetEntityID) != nil else { return }
     _ = try await _aem(targetEntityID, .deregisterUnsolicitedNotification)
+  }
+
+  /// Forgets the registration with an entity, cancelling any renewal in progress.
+  private func _dropUnsolicitedNotificationRegistration(_ targetEntityID: UniqueIdentifier) {
+    _unsolicitedNotificationRegistrations.removeValue(forKey: targetEntityID)?.renewal?.cancel()
   }
 
   private func _renewUnsolicitedNotificationRegistrations() {
     let now = ContinuousClock.now
     for (targetEntityID, registration) in _unsolicitedNotificationRegistrations
-      where registration.isTimeLimited == true &&
-      now - registration.lastSent >= _unsolicitedNotificationRenewalInterval
+      where (registration.isTimeLimited == true || registration.retryDelay != nil) &&
+      registration.renewal == nil && now >= registration.renewalTime
     {
-      // renewed in the background, so that expiry and discovery are not held up
-      _unsolicitedNotificationRegistrations[targetEntityID]?.lastSent = now
-      Task { [weak self] in
-        do {
-          _ = try await self?._aem(targetEntityID, .registerUnsolicitedNotification(flags: .timeLimited))
-        } catch {
-          self?._logger.debug("renewing unsolicited notifications from \(targetEntityID) failed: \(error)")
-        }
-      }
+      _startRenewingUnsolicitedNotificationRegistration(targetEntityID)
     }
   }
 
+  /// Registers again, in the background so that expiry and discovery are not held up.
+  private func _startRenewingUnsolicitedNotificationRegistration(_ targetEntityID: UniqueIdentifier) {
+    guard let registration = _unsolicitedNotificationRegistrations[targetEntityID],
+          registration.renewal == nil
+    else { return }
+    let id = registration.id
+    let flags: RegisterUnsolicitedNotificationFlags = registration.isTimeLimited == false ? [] : .timeLimited
+    _unsolicitedNotificationRegistrations[targetEntityID]?.renewal = Task { [weak self] in
+      await self?._renewUnsolicitedNotificationRegistration(targetEntityID, id: id, flags: flags)
+    }
+  }
+
+  private func _renewUnsolicitedNotificationRegistration(
+    _ targetEntityID: UniqueIdentifier,
+    id: UInt64,
+    flags: RegisterUnsolicitedNotificationFlags
+  ) async {
+    guard _unsolicitedNotificationRegistrations[targetEntityID]?.id == id else { return }
+    var failure: (any Error)?
+    do {
+      _ = try await _aem(targetEntityID, .registerUnsolicitedNotification(flags: flags))
+    } catch {
+      failure = error
+    }
+
+    // a registration dropped meanwhile, by deregistering or by its entity going offline, is
+    // not recorded again
+    guard var registration = _unsolicitedNotificationRegistrations[targetEntityID],
+          registration.id == id
+    else { return }
+    registration.renewal = nil
+    if let failure {
+      let retryDelays = _timing.unsolicitedNotificationRetryDelay
+      let delay = registration.retryDelay.map { min($0 * 2, retryDelays.upperBound) } ??
+        retryDelays.lowerBound
+      _logger.debug("\(entityID): renewing unsolicited notifications from \(targetEntityID) failed, retrying in \(delay): \(failure)")
+      registration.retryDelay = delay
+      registration.renewalTime = .now + delay
+    } else {
+      registration.retryDelay = nil
+      registration.renewalTime = .now + _timing.unsolicitedNotificationRenewalInterval
+    }
+    _unsolicitedNotificationRegistrations[targetEntityID] = registration
+  }
+
   /// Deregisters from every entity on closing, for entities that predate time-limited
-  /// registration. The commands are not awaited, as closing does not wait for responses.
-  private func _deregisterUnsolicitedNotifications() async {
-    let registrations = _unsolicitedNotificationRegistrations.keys
+  /// registration. The commands are queued, not awaited, as closing does not wait for them.
+  private func _deregisterUnsolicitedNotifications() {
+    let registrations = _unsolicitedNotificationRegistrations
     _unsolicitedNotificationRegistrations = [:]
-    for targetEntityID in registrations {
+    for (targetEntityID, registration) in registrations {
+      registration.renewal?.cancel()
       guard let macAddress = _discovery.entity(id: targetEntityID)?.macAddress else { continue }
       let sequenceID = _aecpSequenceID
       _aecpSequenceID &+= 1
-      do {
-        try await endStation.send(.aecp(.aem(AemAecpdu(
-          isResponse: false,
-          targetEntityID: targetEntityID,
-          controllerEntityID: entityID,
-          sequenceID: sequenceID,
-          commandType: .deregisterUnsolicitedNotification
-        ))), to: EUI48(bytes: macAddress))
-      } catch {
-        _logger.debug("\(entityID): deregistering from \(targetEntityID) failed: \(error)")
-      }
+      _transmissions.yield(.pdu(.aecp(.aem(AemAecpdu(
+        isResponse: false,
+        targetEntityID: targetEntityID,
+        controllerEntityID: entityID,
+        sequenceID: sequenceID,
+        commandType: .deregisterUnsolicitedNotification
+      ))), destination: EUI48(bytes: macAddress)))
     }
   }
 
@@ -569,7 +675,7 @@ public actor Controller<Port: NetworkPort> {
       promise: promise,
       timer: timer
     ))
-    await _transmit(_dequeueAecpCommands(targetEntityID), to: targetEntityID)
+    _transmit(_dequeueAecpCommands(targetEntityID))
 
     return try await withTaskCancellationHandler {
       try await promise.value
@@ -593,37 +699,33 @@ public actor Controller<Port: NetworkPort> {
     return transmit
   }
 
-  /// Sends in-flight commands, starting each one's timeout once it has been sent (txCommand,
-  /// IEEE 1722.1-2021 §9.3.6).
-  private func _transmit(_ transactions: [AecpTransaction], to targetEntityID: UniqueIdentifier) async {
+  /// Queues in-flight commands for the transmit task, which starts each one's timeout once it
+  /// has been sent (txCommand, IEEE 1722.1-2021 §9.3.6).
+  private func _transmit(_ transactions: [AecpTransaction]) {
     for transaction in transactions {
-      do {
-        try await endStation.send(.aecp(transaction.aecpdu), to: transaction.destination)
-      } catch {
-        await _completeAecpCommand(
-          targetEntityID,
-          sequenceID: transaction.sequenceID,
-          with: .failure(CommandError.networkError(error))
-        )
-        continue
-      }
-      // it may have been answered or cancelled during the send
-      guard var target = _aecpTargets[targetEntityID],
-            let index = target.inflight.firstIndex(where: { $0.sequenceID == transaction.sequenceID })
-      else { continue }
-      target.inflight[index].sendTime = .now
-      _aecpTargets[targetEntityID] = target
-      transaction.timer.start(interval: _aecpCommandTimeout)
+      _transmissions.yield(.aecpCommand(transaction))
     }
   }
 
-  private func _cancelAecpCommand(_ targetEntityID: UniqueIdentifier, sequenceID: UInt16) async {
+  private func _aecpCommandSent(_ transaction: AecpTransaction) {
+    let targetEntityID = transaction.aecpdu.targetEntityID
+    // it may have been answered or cancelled during the send
+    guard !transaction.promise.isResolved,
+          var target = _aecpTargets[targetEntityID],
+          let index = target.inflight.firstIndex(where: { $0.sequenceID == transaction.sequenceID })
+    else { return }
+    target.inflight[index].sendTime = .now
+    _aecpTargets[targetEntityID] = target
+    transaction.timer.start(interval: _timing.aecpCommandTimeout)
+  }
+
+  private func _cancelAecpCommand(_ targetEntityID: UniqueIdentifier, sequenceID: UInt16) {
     guard var target = _aecpTargets[targetEntityID] else { return }
     if let index = target.queued.firstIndex(where: { $0.sequenceID == sequenceID }) {
       target.queued.remove(at: index)
       _aecpTargets[targetEntityID] = target.inflight.isEmpty && target.queued.isEmpty ? nil : target
     } else {
-      await _completeAecpCommand(targetEntityID, sequenceID: sequenceID, with: .failure(CancellationError()))
+      _completeAecpCommand(targetEntityID, sequenceID: sequenceID, with: .failure(CancellationError()))
     }
   }
 
@@ -631,7 +733,7 @@ public actor Controller<Port: NetworkPort> {
     _ targetEntityID: UniqueIdentifier,
     sequenceID: UInt16,
     with result: Result<Aecpdu, any Error>
-  ) async {
+  ) {
     guard var target = _aecpTargets[targetEntityID],
           let index = target.inflight.firstIndex(where: { $0.sequenceID == sequenceID })
     else { return }
@@ -639,26 +741,32 @@ public actor Controller<Port: NetworkPort> {
     _aecpTargets[targetEntityID] = target
     transaction.timer.stop()
     transaction.promise.resolve(result)
-    await _transmit(_dequeueAecpCommands(targetEntityID), to: targetEntityID)
+    _transmit(_dequeueAecpCommands(targetEntityID))
   }
 
-  private func _aecpCommandTimedOut(_ targetEntityID: UniqueIdentifier, sequenceID: UInt16) async {
+  private func _aecpCommandTimedOut(_ targetEntityID: UniqueIdentifier, sequenceID: UInt16) {
     guard var target = _aecpTargets[targetEntityID],
           let index = target.inflight.firstIndex(where: { $0.sequenceID == sequenceID }),
           // a timer restarted since it fired, by IN_PROGRESS or a retry, supersedes this expiry
           !target.inflight[index].timer.isRunning
     else { return }
 
+    // a command cancelled since is not retried; the cancellation completes it
+    guard !target.inflight[index].promise.isResolved else {
+      _completeAecpCommand(targetEntityID, sequenceID: sequenceID, with: .failure(CancellationError()))
+      return
+    }
+
     guard !target.inflight[index].retried else {
       _yield(.aecpTimeout(targetEntityID))
-      await _completeAecpCommand(targetEntityID, sequenceID: sequenceID, with: .failure(CommandError.timedOut))
+      _completeAecpCommand(targetEntityID, sequenceID: sequenceID, with: .failure(CommandError.timedOut))
       return
     }
 
     target.inflight[index].retried = true
     _aecpTargets[targetEntityID] = target
     _yield(.aecpRetry(targetEntityID))
-    await _transmit([target.inflight[index]], to: targetEntityID)
+    _transmit([target.inflight[index]])
   }
 
   private func _failAecpCommands(towards targetEntityID: UniqueIdentifier) {
@@ -669,11 +777,11 @@ public actor Controller<Port: NetworkPort> {
     }
   }
 
-  func _handle(_ aecpdu: Aecpdu, from sourceMacAddress: EUI48) async {
+  func _handle(_ aecpdu: Aecpdu, from sourceMacAddress: EUI48) {
     switch aecpdu {
     case let .aem(aem):
       guard aem.isResponse else {
-        await _respond(to: aem, from: sourceMacAddress)
+        _respond(to: aem, from: sourceMacAddress)
         return
       }
       if aem.unsolicited, aem.controllerEntityID == IdentifyNotificationControllerEntityID {
@@ -685,7 +793,7 @@ public actor Controller<Port: NetworkPort> {
         _handleUnsolicitedResponse(aem)
         _yield(.aemAecpUnsolicitedReceived(aem.targetEntityID, sequenceID: aem.sequenceID))
       } else {
-        await _handleAecpResponse(
+        _handleAecpResponse(
           aecpdu,
           inProgress: aem.status == AemStatus.inProgress.rawValue,
           from: sourceMacAddress
@@ -697,7 +805,7 @@ public actor Controller<Port: NetworkPort> {
         _handleUnsolicitedResponse(mvu)
         _yield(.mvuAecpUnsolicitedReceived(mvu.targetEntityID, sequenceID: mvu.sequenceID))
       } else {
-        await _handleAecpResponse(aecpdu, inProgress: false, from: sourceMacAddress)
+        _handleAecpResponse(aecpdu, inProgress: false, from: sourceMacAddress)
       }
     case .other:
       break
@@ -707,25 +815,21 @@ public actor Controller<Port: NetworkPort> {
   /// Answers AEM commands addressed to this controller: CONTROLLER_AVAILABLE succeeds, so that
   /// an entity this controller has acquired is not taken by another controller (IEEE
   /// 1722.1-2021 §7.4.1), and any other command is not implemented (§9.3.5.3.3).
-  private func _respond(to command: AemAecpdu, from sourceMacAddress: EUI48) async {
+  private func _respond(to command: AemAecpdu, from sourceMacAddress: EUI48) {
     guard !_isClosed, command.targetEntityID == entityID else { return }
     var response = command
     response.isResponse = true
     response.unsolicited = false
     let status: AemStatus = command.commandType == .controllerAvailable ? .success : .notImplemented
     response.status = UInt8(status.rawValue)
-    do {
-      try await endStation.send(.aecp(.aem(response)), to: sourceMacAddress)
-    } catch {
-      _logger.debug("\(entityID): response to \(command.commandType) failed: \(error)")
-    }
+    _transmissions.yield(.pdu(.aecp(.aem(response)), destination: sourceMacAddress))
   }
 
   private func _handleAecpResponse(
     _ aecpdu: Aecpdu,
     inProgress: Bool,
     from sourceMacAddress: EUI48
-  ) async {
+  ) {
     let targetEntityID = aecpdu.targetEntityID
     let sequenceID = aecpdu.sequenceID
     guard let transaction = _aecpTargets[targetEntityID]?.inflight
@@ -746,11 +850,11 @@ public actor Controller<Port: NetworkPort> {
         target.inflight[index].sendTime = .now
         _aecpTargets[targetEntityID] = target
       }
-      transaction.timer.start(interval: _aecpCommandTimeout)
+      transaction.timer.start(interval: _timing.aecpCommandTimeout)
       return
     }
     let responseTime = ContinuousClock.now - transaction.sendTime
-    await _completeAecpCommand(targetEntityID, sequenceID: sequenceID, with: .success(aecpdu))
+    _completeAecpCommand(targetEntityID, sequenceID: sequenceID, with: .success(aecpdu))
     _yield(.aecpResponseTime(targetEntityID, responseTime: responseTime.wholeMilliseconds))
   }
 
@@ -914,9 +1018,10 @@ public actor Controller<Port: NetworkPort> {
       default: break
       }
     case .deregisterUnsolicitedNotification:
-      // the entity removed a registration that was not renewed in time (§7.4.37.2)
-      _unsolicitedNotificationRegistrations[id] = nil
+      // the entity removed a registration that was not renewed in time (§7.4.37.2); one that
+      // is still wanted is registered again
       _yield(.deregisteredFromUnsolicitedNotifications(id))
+      _startRenewingUnsolicitedNotificationRegistration(id)
     case let .getAvbInfo(descriptorType, descriptorIndex, avbInfo):
       guard descriptorType == .avbInterface else { break }
       _yield(.avbInfoChanged(id, avbInterfaceIndex: descriptorIndex, info: avbInfo))
@@ -1072,7 +1177,7 @@ public actor Controller<Port: NetworkPort> {
       await self?._acmpCommandTimedOut(sequenceID: sequenceID)
     }
     _acmpTransactions[sequenceID] = AcmpTransaction(acmpdu: acmpdu, promise: promise, timer: timer)
-    await _transmitAcmpCommand(sequenceID: sequenceID)
+    _transmitAcmpCommand(sequenceID: sequenceID)
 
     let response: Acmpdu
     do {
@@ -1104,33 +1209,38 @@ public actor Controller<Port: NetworkPort> {
     transaction.promise.resolve(result)
   }
 
-  /// Sends an ACMP command, starting its timeout once it has been sent (txCommand, IEEE
-  /// 1722.1-2021 §8.2.3).
-  private func _transmitAcmpCommand(sequenceID: UInt16) async {
+  /// Queues an ACMP command for the transmit task, which starts its timeout once it has been
+  /// sent (txCommand, IEEE 1722.1-2021 §8.2.3).
+  private func _transmitAcmpCommand(sequenceID: UInt16) {
     guard let transaction = _acmpTransactions[sequenceID] else { return }
-    do {
-      try await endStation.send(.acmp(transaction.acmpdu), to: AvdeccMulticastMacAddress)
-    } catch {
-      _completeAcmpCommand(sequenceID: sequenceID, with: .failure(CommandError.networkError(error)))
-      return
-    }
-    // it may have been answered or cancelled during the send
-    guard _acmpTransactions[sequenceID]?.timer === transaction.timer else { return }
-    transaction.timer.start(interval: _acmpCommandTimeout(transaction.acmpdu.messageType))
+    _transmissions.yield(.acmpCommand(transaction, sequenceID: sequenceID))
   }
 
-  private func _acmpCommandTimedOut(sequenceID: UInt16) async {
+  private func _acmpCommandSent(sequenceID: UInt16, timer: Timer) {
+    // it may have been answered or cancelled during the send
+    guard let transaction = _acmpTransactions[sequenceID], transaction.timer === timer,
+          !transaction.promise.isResolved
+    else { return }
+    timer.start(interval: _acmpCommandTimeout(transaction.acmpdu.messageType))
+  }
+
+  private func _acmpCommandSendFailed(sequenceID: UInt16, timer: Timer, error: any Error) {
+    guard _acmpTransactions[sequenceID]?.timer === timer else { return }
+    _completeAcmpCommand(sequenceID: sequenceID, with: .failure(CommandError.networkError(error)))
+  }
+
+  private func _acmpCommandTimedOut(sequenceID: UInt16) {
     // a timer restarted since it fired supersedes this expiry
     guard var transaction = _acmpTransactions[sequenceID], !transaction.timer.isRunning else {
       return
     }
-    guard !transaction.retried else {
+    guard !transaction.retried, !transaction.promise.isResolved else {
       _completeAcmpCommand(sequenceID: sequenceID, with: .failure(CommandError.timedOut))
       return
     }
     transaction.retried = true
     _acmpTransactions[sequenceID] = transaction
-    await _transmitAcmpCommand(sequenceID: sequenceID)
+    _transmitAcmpCommand(sequenceID: sequenceID)
   }
 
   func _handle(_ acmpdu: Acmpdu) {
