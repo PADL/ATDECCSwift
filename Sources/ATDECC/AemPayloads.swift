@@ -968,8 +968,8 @@ extension StreamInfo {
     msrpFailureBridgeID = try UInt64(parsingBigEndian: &input)
     streamVlanID = try UInt16(parsingBigEndian: &input)
     streamInfoFlagsEx = nil
-    probingStatus = nil
-    acmpStatus = nil
+    probingStatusRaw = nil
+    acmpStatusRaw = nil
 
     if payloadLength >= _ieee2021StreamInfoLength {
       // ip_flags, source_port, destination_port, source_ip_address, destination_ip_address
@@ -977,9 +977,9 @@ extension StreamInfo {
     } else if payloadLength >= _milanStreamInfoLength {
       _ = try UInt16(parsingBigEndian: &input) // reserved
       streamInfoFlagsEx = try StreamInfoFlagsEx(rawValue: UInt32(parsingBigEndian: &input))
-      let probingAcmpStatus = try UInt8(parsing: &input)
-      probingStatus = ProbingStatus(probingAcmpStatus >> 5)
-      acmpStatus = AcmpStatus(UInt16(probingAcmpStatus & 0x1F))
+      let probingAcmpStatus = try ProbingAcmpStatus(UInt8(parsing: &input))
+      probingStatusRaw = probingAcmpStatus.probingStatusRaw
+      acmpStatusRaw = probingAcmpStatus.acmpStatusRaw
       _ = try UInt8(parsing: &input) // reserved
       _ = try UInt16(parsingBigEndian: &input) // reserved
     } else {

@@ -192,9 +192,9 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(flags.rawValue, 1)
   }
 
-  func testProbingStatusUnknownDefaults() {
-    XCTAssertEqual(ProbingStatus(99), .disabled)
-    XCTAssertEqual(ProbingStatus(2), .active)
+  func testProbingStatusReservedCodes() {
+    XCTAssertEqual(ProbingStatus(rawValue: 2), .active)
+    XCTAssertNil(ProbingStatus(rawValue: 4))
   }
 
   func testDefaultMediaClockReferencePriority() {

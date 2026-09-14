@@ -245,15 +245,15 @@ public enum MvuResponsePayload: Sendable, Hashable {
           entityID: UniqueIdentifier(parsing: &input),
           streamIndex: UInt16(parsingBigEndian: &input)
         )
-        let probingAcmpStatus = try UInt8(parsing: &input)
+        let probingAcmpStatus = try ProbingAcmpStatus(UInt8(parsing: &input))
         _ = try UInt8(parsing: &input) // reserved
         return .getStreamInputInfoEx(
           descriptorType: descriptorType,
           descriptorIndex: descriptorIndex,
           info: StreamInputInfoEx(
             talkerStream: talkerStream,
-            probingStatus: ProbingStatus(probingAcmpStatus >> 5),
-            acmpStatus: AcmpStatus(UInt16(probingAcmpStatus & 0x1F))
+            probingStatusRaw: probingAcmpStatus.probingStatusRaw,
+            acmpStatusRaw: probingAcmpStatus.acmpStatusRaw
           )
         )
       default:

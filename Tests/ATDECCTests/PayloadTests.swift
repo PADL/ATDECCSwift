@@ -174,7 +174,7 @@ final class PayloadTests: XCTestCase {
     data += be64(0x0205_0220_0040_6000) + be64(0x001B_92FF_FE01_0000)
     data += be32(1000) + [0x91, 0xE0, 0xF0, 0x00, 0x12, 0x34, 0, 0] + be64(0) + be16(2)
     data += be16(0) + be32(StreamInfoFlagsEx.registering.rawValue)
-    data += [(ProbingStatus.completed.rawValue << 5) | 0, 0] + be16(0)
+    data += [0x60, 0] + be16(0) // probing_status COMPLETED, acmp_status SUCCESS
     XCTAssertEqual(data.count, 56)
 
     guard case let .getStreamInfo(descriptorType, _, info) =
@@ -189,6 +189,25 @@ final class PayloadTests: XCTestCase {
     XCTAssertEqual(info.streamInfoFlagsEx, .registering)
     XCTAssertEqual(info.probingStatus, .completed)
     XCTAssertEqual(info.acmpStatus, .success)
+  }
+
+  func testMilanGetStreamInfoReservedStatus() throws {
+    var data = be16(DescriptorType.streamInput.rawValue) + be16(0)
+    data += be32(0) + be64(0) + be64(0) + be32(0) + [UInt8](repeating: 0, count: 8) +
+      be64(0) + be16(0)
+    data += be16(0) + be32(0)
+    data += [0xF4, 0] + be16(0) // probing_status 7 and acmp_status 20, both reserved
+    XCTAssertEqual(data.count, 56)
+
+    guard case let .getStreamInfo(_, _, info) =
+      try AemResponsePayload(commandTypeRaw: AemCommandType.getStreamInfo.rawValue, data: data)
+    else {
+      return XCTFail("expected GET_STREAM_INFO")
+    }
+    XCTAssertEqual(info.probingStatusRaw, 7)
+    XCTAssertNil(info.probingStatus)
+    XCTAssertEqual(info.acmpStatusRaw, 20)
+    XCTAssertEqual(info.acmpStatus, .reserved20)
   }
 
   func testSetStreamInfoCommandLength() throws {
@@ -348,6 +367,36 @@ final class PayloadTests: XCTestCase {
 }
 
 extension PayloadTests {
+  func testGetStreamInputInfoExReservedStatus() throws {
+    let data: [UInt8] = [
+      0x00, 0x00, 0x00, 0x05, 0x00, 0x01, // reserved, STREAM_INPUT 1
+      0x00, 0x1B, 0x92, 0xFF, 0xFE, 0x01, 0x02, 0x03, 0x00, 0x02, // talker stream
+      0xAF, 0x00, // probing_status 5 (reserved), acmp_status 15 (reserved); reserved
+    ]
+    guard case let .getStreamInputInfoEx(_, descriptorIndex, info) = try MvuResponsePayload(
+      commandTypeRaw: MvuCommandType.getStreamInputInfoEx.rawValue,
+      data: data
+    ) else {
+      return XCTFail("expected GET_STREAM_INPUT_INFO_EX")
+    }
+    XCTAssertEqual(descriptorIndex, 1)
+    XCTAssertEqual(info.talkerStream.streamIndex, 2)
+    XCTAssertEqual(info.probingStatusRaw, 5)
+    XCTAssertNil(info.probingStatus)
+    XCTAssertEqual(info.acmpStatusRaw, 15)
+    XCTAssertEqual(info.acmpStatus, .reserved15)
+
+    let active: [UInt8] = Array(data.prefix(16)) + [0x47, 0x00] // ACTIVE, LISTENER_TALKER_TIMEOUT
+    guard case let .getStreamInputInfoEx(_, _, activeInfo) = try MvuResponsePayload(
+      commandTypeRaw: MvuCommandType.getStreamInputInfoEx.rawValue,
+      data: active
+    ) else {
+      return XCTFail("expected GET_STREAM_INPUT_INFO_EX")
+    }
+    XCTAssertEqual(activeInfo.probingStatus, .active)
+    XCTAssertEqual(activeInfo.acmpStatus, .listenerTalkerTimeout)
+  }
+
   func testMediaClockReferenceInfoDefaultPriority() throws {
     // SET_MEDIA_CLOCK_REFERENCE_INFO with the default priority of an entity providing no data
     let command = MvuCommandPayload.setMediaClockReferenceInfo(

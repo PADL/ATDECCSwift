@@ -60,6 +60,8 @@ private final class FakeEntity: Sendable {
     /// AEM commands are not answered until `releaseHeldResponses()`.
     var holdResponses = false
     var dropAcmpCommands = false
+    /// The status of CONNECT_RX_RESPONSE.
+    var acmpStatus = UInt8(0)
   }
 
   let port: VirtualPort
@@ -215,6 +217,7 @@ private final class FakeEntity: Sendable {
       acmpdu.listenerEntityID == entityID && !behaviour.withLock(\.dropAcmpCommands):
       var response = acmpdu
       response.messageType = .connectRxResponse
+      response.status = behaviour.withLock(\.acmpStatus)
       response.connectionCount = 1
       try? await send(.acmp(response), to: AvdeccMulticastMacAddress)
     default:
@@ -607,6 +610,34 @@ final class ControllerTests: XCTestCase {
       if case .controllerConnectResponse = $0 { true } else { false }
     }
     XCTAssertNil(sniffed)
+    await controller.close()
+  }
+
+  func testReservedAcmpStatusIsPreserved() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    // 20 is reserved in IEEE 1722.1-2021 Table 8-3
+    entity.behaviour.withLock { $0.acmpStatus = 20 }
+    let talker = StreamIdentification(entityID: UniqueIdentifier(0x0200_00FF_FE00_0003), streamIndex: 0)
+    let listener = StreamIdentification(entityID: entityID, streamIndex: 0)
+    do {
+      _ = try await controller.connectStream(talker: talker, listener: listener)
+      XCTFail("expected a reserved status")
+    } catch let status as AcmpStatus {
+      XCTAssertEqual(status.rawValue, 20)
+    }
+
+    try await entity.send(.acmp(Acmpdu(
+      messageType: .connectRxResponse,
+      status: 21,
+      controllerEntityID: UniqueIdentifier(0x0200_00FF_FE00_0099),
+      talkerEntityID: talker.entityID,
+      listenerEntityID: entityID
+    )), to: AvdeccMulticastMacAddress)
+    let sniffed = await first(events) {
+      if case let .controllerConnectResponse(_, status) = $0 { status.rawValue == 21 } else { false }
+    }
+    XCTAssertNotNil(sniffed)
     await controller.close()
   }
 
