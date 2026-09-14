@@ -90,56 +90,114 @@ extension UniqueIdentifier: SerDes {
 /// 16-bit AEM descriptor index (IEEE 1722.1-2021 §7.2).
 public typealias DescriptorIndex = UInt16
 
-/// AEM descriptor type codes (IEEE 1722.1-2021 Table 7-1). Codes outside this set decode to
-/// `.invalid`.
-public enum DescriptorType: UInt16, Sendable, CaseIterable {
-  case entity = 0x0000
-  case configuration = 0x0001
-  case audioUnit = 0x0002
-  case videoUnit = 0x0003
-  case sensorUnit = 0x0004
-  case streamInput = 0x0005
-  case streamOutput = 0x0006
-  case jackInput = 0x0007
-  case jackOutput = 0x0008
-  case avbInterface = 0x0009
-  case clockSource = 0x000A
-  case memoryObject = 0x000B
-  case locale = 0x000C
-  case strings = 0x000D
-  case streamPortInput = 0x000E
-  case streamPortOutput = 0x000F
-  case externalPortInput = 0x0010
-  case externalPortOutput = 0x0011
-  case internalPortInput = 0x0012
-  case internalPortOutput = 0x0013
-  case audioCluster = 0x0014
-  case videoCluster = 0x0015
-  case sensorCluster = 0x0016
-  case audioMap = 0x0017
-  case videoMap = 0x0018
-  case sensorMap = 0x0019
-  case control = 0x001A
-  case signalSelector = 0x001B
-  case mixer = 0x001C
-  case matrix = 0x001D
-  case matrixSignal = 0x001E
-  case signalSplitter = 0x001F
-  case signalCombiner = 0x0020
-  case signalDemultiplexer = 0x0021
-  case signalMultiplexer = 0x0022
-  case signalTranscoder = 0x0023
-  case clockDomain = 0x0024
-  case controlBlock = 0x0025
-  case timing = 0x0026
-  case ptpInstance = 0x0027
-  case ptpPort = 0x0028
-  case invalid = 0xFFFF
+/// AEM descriptor type code (IEEE 1722.1-2021 Table 7-1).
+///
+/// The code space is open: CONFIGURATION descriptor_counts and CLOCK_SOURCE location types can
+/// name vendor or future descriptor types, which have to round-trip. The named types are
+/// static constants, which `switch` matches as it would enum cases.
+public struct DescriptorType: RawRepresentable, Sendable, Hashable, CustomStringConvertible {
+  public let rawValue: UInt16
+
+  public init(rawValue: UInt16) {
+    self.rawValue = rawValue
+  }
+
+  public static let entity = DescriptorType(rawValue: 0x0000)
+  public static let configuration = DescriptorType(rawValue: 0x0001)
+  public static let audioUnit = DescriptorType(rawValue: 0x0002)
+  public static let videoUnit = DescriptorType(rawValue: 0x0003)
+  public static let sensorUnit = DescriptorType(rawValue: 0x0004)
+  public static let streamInput = DescriptorType(rawValue: 0x0005)
+  public static let streamOutput = DescriptorType(rawValue: 0x0006)
+  public static let jackInput = DescriptorType(rawValue: 0x0007)
+  public static let jackOutput = DescriptorType(rawValue: 0x0008)
+  public static let avbInterface = DescriptorType(rawValue: 0x0009)
+  public static let clockSource = DescriptorType(rawValue: 0x000A)
+  public static let memoryObject = DescriptorType(rawValue: 0x000B)
+  public static let locale = DescriptorType(rawValue: 0x000C)
+  public static let strings = DescriptorType(rawValue: 0x000D)
+  public static let streamPortInput = DescriptorType(rawValue: 0x000E)
+  public static let streamPortOutput = DescriptorType(rawValue: 0x000F)
+  public static let externalPortInput = DescriptorType(rawValue: 0x0010)
+  public static let externalPortOutput = DescriptorType(rawValue: 0x0011)
+  public static let internalPortInput = DescriptorType(rawValue: 0x0012)
+  public static let internalPortOutput = DescriptorType(rawValue: 0x0013)
+  public static let audioCluster = DescriptorType(rawValue: 0x0014)
+  public static let videoCluster = DescriptorType(rawValue: 0x0015)
+  public static let sensorCluster = DescriptorType(rawValue: 0x0016)
+  public static let audioMap = DescriptorType(rawValue: 0x0017)
+  public static let videoMap = DescriptorType(rawValue: 0x0018)
+  public static let sensorMap = DescriptorType(rawValue: 0x0019)
+  public static let control = DescriptorType(rawValue: 0x001A)
+  public static let signalSelector = DescriptorType(rawValue: 0x001B)
+  public static let mixer = DescriptorType(rawValue: 0x001C)
+  public static let matrix = DescriptorType(rawValue: 0x001D)
+  public static let matrixSignal = DescriptorType(rawValue: 0x001E)
+  public static let signalSplitter = DescriptorType(rawValue: 0x001F)
+  public static let signalCombiner = DescriptorType(rawValue: 0x0020)
+  public static let signalDemultiplexer = DescriptorType(rawValue: 0x0021)
+  public static let signalMultiplexer = DescriptorType(rawValue: 0x0022)
+  public static let signalTranscoder = DescriptorType(rawValue: 0x0023)
+  public static let clockDomain = DescriptorType(rawValue: 0x0024)
+  public static let controlBlock = DescriptorType(rawValue: 0x0025)
+  public static let timing = DescriptorType(rawValue: 0x0026)
+  public static let ptpInstance = DescriptorType(rawValue: 0x0027)
+  public static let ptpPort = DescriptorType(rawValue: 0x0028)
+  public static let invalid = DescriptorType(rawValue: 0xFFFF)
+
+  /// The name of a type in Table 7-1, or its code in hex.
+  public var description: String {
+    switch self {
+    case .entity: "entity"
+    case .configuration: "configuration"
+    case .audioUnit: "audioUnit"
+    case .videoUnit: "videoUnit"
+    case .sensorUnit: "sensorUnit"
+    case .streamInput: "streamInput"
+    case .streamOutput: "streamOutput"
+    case .jackInput: "jackInput"
+    case .jackOutput: "jackOutput"
+    case .avbInterface: "avbInterface"
+    case .clockSource: "clockSource"
+    case .memoryObject: "memoryObject"
+    case .locale: "locale"
+    case .strings: "strings"
+    case .streamPortInput: "streamPortInput"
+    case .streamPortOutput: "streamPortOutput"
+    case .externalPortInput: "externalPortInput"
+    case .externalPortOutput: "externalPortOutput"
+    case .internalPortInput: "internalPortInput"
+    case .internalPortOutput: "internalPortOutput"
+    case .audioCluster: "audioCluster"
+    case .videoCluster: "videoCluster"
+    case .sensorCluster: "sensorCluster"
+    case .audioMap: "audioMap"
+    case .videoMap: "videoMap"
+    case .sensorMap: "sensorMap"
+    case .control: "control"
+    case .signalSelector: "signalSelector"
+    case .mixer: "mixer"
+    case .matrix: "matrix"
+    case .matrixSignal: "matrixSignal"
+    case .signalSplitter: "signalSplitter"
+    case .signalCombiner: "signalCombiner"
+    case .signalDemultiplexer: "signalDemultiplexer"
+    case .signalMultiplexer: "signalMultiplexer"
+    case .signalTranscoder: "signalTranscoder"
+    case .clockDomain: "clockDomain"
+    case .controlBlock: "controlBlock"
+    case .timing: "timing"
+    case .ptpInstance: "ptpInstance"
+    case .ptpPort: "ptpPort"
+    case .invalid: "invalid"
+    default: "0x" + rawValue.paddedHex(width: 4)
+    }
+  }
 }
 
 extension DescriptorType: SerDes {
   public init(parsing input: inout ParserSpan) throws {
-    self = try DescriptorType(rawValue: UInt16(parsingBigEndian: &input)) ?? .invalid
+    try self.init(rawValue: UInt16(parsingBigEndian: &input))
   }
 
   public func serialize(into serializationContext: inout SerializationContext) throws {

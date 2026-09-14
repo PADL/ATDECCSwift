@@ -1206,7 +1206,7 @@ public enum Descriptor: Sendable, Hashable {
     case .timing: .timing
     case .ptpInstance: .ptpInstance
     case .ptpPort: .ptpPort
-    case let .other(descriptorType, _): DescriptorType(rawValue: descriptorType) ?? .invalid
+    case let .other(descriptorType, _): DescriptorType(rawValue: descriptorType)
     }
   }
 

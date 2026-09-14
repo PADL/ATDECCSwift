@@ -74,6 +74,44 @@ final class PayloadTests: XCTestCase {
     XCTAssertEqual(context.bytes.count, bytes.count)
   }
 
+  func testConfigurationDescriptorVendorCounts() throws {
+    let bytes: [UInt8] = [0x00, 0x01, 0x00, 0x00] + // CONFIGURATION 0
+      fixedString("Vendor") + [0xFF, 0xFF] + // object_name, localized_description
+      [0x00, 0x03, 0x00, 0x4A] + // descriptor_counts_count 3, descriptor_counts_offset 74
+      [0x00, 0x05, 0x00, 0x02] + // STREAM_INPUT: 2
+      [0x01, 0x00, 0x00, 0x07] + // 0x0100: 7
+      [0x01, 0x01, 0x00, 0x09] // 0x0101: 9
+    let (_, _, descriptor) = try readDescriptorResponse(bytes)
+    guard case let .configuration(configuration) = descriptor else {
+      return XCTFail("expected CONFIGURATION")
+    }
+    XCTAssertEqual(configuration.descriptorCounts.count, 3)
+    XCTAssertEqual(configuration.descriptorCount(DescriptorType(rawValue: 0x0005)), 2)
+    XCTAssertEqual(configuration.descriptorCount(DescriptorType(rawValue: 0x0100)), 7)
+    XCTAssertEqual(configuration.descriptorCount(DescriptorType(rawValue: 0x0101)), 9)
+
+    var context = SerializationContext()
+    try descriptor.serialize(descriptorIndex: 0, into: &context)
+    XCTAssertEqual(context.bytes, bytes)
+  }
+
+  func testClockSourceDescriptorVendorLocationType() throws {
+    let bytes: [UInt8] = [0x00, 0x0A, 0x00, 0x00] + // CLOCK_SOURCE 0
+      fixedString("Word Clock") + [0xFF, 0xFF] + // object_name, localized_description
+      [0x00, 0x00, 0x00, 0x01] + // clock_source_flags, clock_source_type EXTERNAL
+      [0, 0, 0, 0, 0, 0, 0, 0] + // clock_source_identifier
+      [0x80, 0x01, 0x00, 0x02] // clock_source_location_type 0x8001, index 2
+    let (_, _, descriptor) = try readDescriptorResponse(bytes)
+    guard case let .clockSource(clockSource) = descriptor else {
+      return XCTFail("expected CLOCK_SOURCE")
+    }
+    XCTAssertEqual(clockSource.clockSourceLocationType.rawValue, 0x8001)
+
+    var context = SerializationContext()
+    try descriptor.serialize(descriptorIndex: 0, into: &context)
+    XCTAssertEqual(context.bytes, bytes)
+  }
+
   func testStreamDescriptorFormatsAtOffset() throws {
     let formats: [UInt64] = [0x0205_0220_0040_6000, 0x00A0_0208_4000_0800]
     var body = fixedString("Input 1") + be16(0xFFFF) + be16(0) // name, localized, clock domain
