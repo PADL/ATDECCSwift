@@ -11,8 +11,9 @@ entities, which responses raise notifications) deliberately matches it.
 
 ## Status
 
-- Linux only. Frames are sent and received with `AF_PACKET` sockets driven by io_uring
-  ([IORingSwift](https://github.com/PADL/IORingSwift)).
+- Linux only. Frames are sent and received with io_uring
+  ([IORingSwift](https://github.com/PADL/IORingSwift)), on `AF_PACKET` sockets or serial
+  devices.
 - ATDECC Controller role. The codecs encode and decode commands and responses in both
   directions, so an entity (talker/listener) responder can be added later.
 - Swift 6 strict concurrency: `EndStation` and `Controller` are actors.
@@ -28,7 +29,8 @@ entities, which responses raise notifications) deliberately matches it.
 | ACMP controller commands and sniffing (§8.2) | ✓ |
 | Unsolicited notifications as events (§7.5.2) | ✓ |
 | Raw PDU send | ✓ |
-| Not yet | WRITE_DESCRIPTOR, video/sensor formats and maps, signal selectors/mixers/matrices, authentication and security, GET_DYNAMIC_INFO, address access, entity responder, serial transport |
+| Serial (UART) transport | ✓ COBS-framed AVTPDUs |
+| Not yet | WRITE_DESCRIPTOR, video/sensor formats and maps, signal selectors/mixers/matrices, authentication and security, GET_DYNAMIC_INFO, address access, entity responder |
 
 ## Quick taste
 
@@ -57,8 +59,8 @@ The names follow IEEE 1722.1-2021:
 
 - **`NetworkPort`** — a protocol for the link AVTP frames travel on. `EthernetPort` joins the
   AVDECC multicast groups (rather than going promiscuous, so it works behind bridges that
-  filter multicast in hardware); `VirtualPort` connects ports on an in-memory
-  `VirtualNetwork` for tests and simulation.
+  filter multicast in hardware); `SerialPort` reaches a single entity over a UART; and
+  `VirtualPort` connects ports on an in-memory `VirtualNetwork` for tests and simulation.
 - **`EndStation<Port>`** — an ATDECC End Station: owns a port, dispatches received PDUs to
   its entities, and issues dynamic entity IDs.
 - **`Controller<Port>`** — an ATDECC Controller entity. It runs a Discovery state machine,
@@ -108,6 +110,22 @@ capability to the binary:
 ```sh
 sudo setcap cap_net_raw+ep .build/debug/avdecc-discovery
 .build/debug/avdecc-discovery eth0
+```
+
+## Serial links
+
+`SerialPort` carries ATDECC over a point-to-point UART, as used between a host and an AVB
+entity's firmware. Each AVTPDU (the AVTP control header and its ADP, AECP or ACMP data, with no
+Ethernet header or padding) is COBS encoded and sent between zero bytes. The device is set to
+raw 8N1 at the requested baud rate (115200 by default).
+
+The wire carries no addresses. Every frame goes to the one peer, and received frames appear to come from
+`SerialPortPeerMacAddress`. The host end uses `SerialPortLocalMacAddress`
+(`0A:E9:1B:00:00:00`) by default, because the entity firmware sends frames addressed to it, and
+all multicast frames, to its UART.
+
+```sh
+.build/debug/avdecc-discovery /dev/ttyAMA0@115200
 ```
 
 ## License
