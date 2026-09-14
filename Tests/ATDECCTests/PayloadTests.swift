@@ -258,3 +258,22 @@ final class PayloadTests: XCTestCase {
     XCTAssertEqual(info.mediaClockDomainName, "primary")
   }
 }
+
+extension PayloadTests {
+  func testRegisterUnsolicitedNotificationFlags() throws {
+    let command = AemCommandPayload.registerUnsolicitedNotification(flags: .timeLimited)
+    XCTAssertEqual(try command.serialized(), [0x00, 0x00, 0x00, 0x01])
+
+    let commandType = AemCommandType.registerUnsolicitedNotification.rawValue
+    guard case let .registerUnsolicitedNotification(flags) =
+      try AemCommandPayload(commandTypeRaw: commandType, data: [0x00, 0x00, 0x00, 0x01])
+    else { return XCTFail("not REGISTER_UNSOLICITED_NOTIFICATION") }
+    XCTAssertEqual(flags, .timeLimited)
+
+    // a command from an entity predating IEEE 1722.1-2021 has no flags (§7.4.37.1)
+    guard case let .registerUnsolicitedNotification(noFlags) =
+      try AemCommandPayload(commandTypeRaw: commandType, data: [])
+    else { return XCTFail("not REGISTER_UNSOLICITED_NOTIFICATION") }
+    XCTAssertEqual(noFlags, [])
+  }
+}

@@ -40,6 +40,10 @@ private func _acmpCommandTimeout(_ messageType: AcmpMessageType) -> Duration {
   }
 }
 
+/// How often a time-limited unsolicited notification registration is renewed (IEEE
+/// 1722.1-2021 §7.4.37.2).
+private let _unsolicitedNotificationRenewalInterval = Duration.seconds(100)
+
 /// How often discovered interfaces' valid times are checked.
 private let _discoveryExpiryInterval = Duration.milliseconds(500)
 
@@ -146,6 +150,16 @@ public actor Controller<Port: NetworkPort> {
     var retried = false
   }
 
+  /// A registration for an entity's unsolicited notifications, from when it is requested.
+  private struct UnsolicitedNotificationRegistration: Sendable {
+    /// Distinguishes this registration from a later one for the same entity.
+    let id: UInt64
+    /// Whether the entity accepted a time-limited registration, which is renewed; nil until
+    /// the entity responds.
+    var isTimeLimited: Bool?
+    var lastSent: ContinuousClock.Instant
+  }
+
   private struct Advertising: Sendable {
     let validTime: UInt8
     let interfaceIndex: UInt16?
@@ -171,6 +185,8 @@ public actor Controller<Port: NetworkPort> {
   private var _advertisementSend: Task<(), Never>?
   private var _availableIndex = UInt32(0)
   private var _lastLinkIsUp = false
+  private var _unsolicitedNotificationRegistrations = [UniqueIdentifier: UnsolicitedNotificationRegistration]()
+  private var _nextUnsolicitedNotificationRegistration = UInt64(0)
   private var _isClosed = false
 
   /// Creates a controller entity with `entityID` on `endStation`, and sends ENTITY_DISCOVER
@@ -209,6 +225,7 @@ public actor Controller<Port: NetworkPort> {
     guard !_isClosed else { return }
     _isClosed = true
     _maintenanceTask?.cancel()
+    await _deregisterUnsolicitedNotifications()
 
     for transaction in _aecpTargets.values.flatMap({ $0.inflight + $0.queued }) {
       transaction.timer.stop()
@@ -326,6 +343,8 @@ public actor Controller<Port: NetworkPort> {
       case let .offline(entityID):
         _yield(.entityOffline(entityID))
         _failAecpCommands(towards: entityID)
+        // an entity that returns has lost its registrations
+        _unsolicitedNotificationRegistrations[entityID] = nil
       }
     }
   }
@@ -333,6 +352,7 @@ public actor Controller<Port: NetworkPort> {
   private func _maintainDiscovery() async {
     guard !_isClosed else { return }
     _apply(_discovery.expire())
+    _renewUnsolicitedNotificationRegistrations()
     guard let delay = _automaticDiscoveryDelay, ContinuousClock.now - _lastDiscovery >= delay
     else { return }
     do {
@@ -442,6 +462,87 @@ public actor Controller<Port: NetworkPort> {
     }
     _advertisementSend = send
     await send.value
+  }
+
+  // MARK: - Unsolicited notification registrations
+
+  /// Registrations are time limited, so that entities stop sending notifications to a
+  /// controller that has gone away, and renewed until deregistered. An entity that rejects the
+  /// flags field, predating IEEE 1722.1-2021, is registered without it.
+  private func _registerUnsolicitedNotifications(_ targetEntityID: UniqueIdentifier) async throws {
+    let id = _nextUnsolicitedNotificationRegistration
+    _nextUnsolicitedNotificationRegistration += 1
+    // recorded before sending, so that deregistering during the command supersedes it
+    _unsolicitedNotificationRegistrations[targetEntityID] = UnsolicitedNotificationRegistration(
+      id: id,
+      lastSent: .now
+    )
+
+    let isTimeLimited: Bool
+    do {
+      do {
+        _ = try await _aem(targetEntityID, .registerUnsolicitedNotification(flags: .timeLimited))
+        isTimeLimited = true
+      } catch AemStatus.badArguments {
+        _ = try await _aem(targetEntityID, .registerUnsolicitedNotification(flags: []))
+        isTimeLimited = false
+      }
+    } catch {
+      if _unsolicitedNotificationRegistrations[targetEntityID]?.id == id {
+        _unsolicitedNotificationRegistrations[targetEntityID] = nil
+      }
+      throw error
+    }
+
+    guard _unsolicitedNotificationRegistrations[targetEntityID]?.id == id else { return }
+    _unsolicitedNotificationRegistrations[targetEntityID]?.isTimeLimited = isTimeLimited
+    _unsolicitedNotificationRegistrations[targetEntityID]?.lastSent = .now
+  }
+
+  private func _deregisterUnsolicitedNotifications(_ targetEntityID: UniqueIdentifier) async throws {
+    _unsolicitedNotificationRegistrations[targetEntityID] = nil
+    _ = try await _aem(targetEntityID, .deregisterUnsolicitedNotification)
+  }
+
+  private func _renewUnsolicitedNotificationRegistrations() {
+    let now = ContinuousClock.now
+    for (targetEntityID, registration) in _unsolicitedNotificationRegistrations
+      where registration.isTimeLimited == true &&
+      now - registration.lastSent >= _unsolicitedNotificationRenewalInterval
+    {
+      // renewed in the background, so that expiry and discovery are not held up
+      _unsolicitedNotificationRegistrations[targetEntityID]?.lastSent = now
+      Task { [weak self] in
+        do {
+          _ = try await self?._aem(targetEntityID, .registerUnsolicitedNotification(flags: .timeLimited))
+        } catch {
+          self?._logger.debug("renewing unsolicited notifications from \(targetEntityID) failed: \(error)")
+        }
+      }
+    }
+  }
+
+  /// Deregisters from every entity on closing, for entities that predate time-limited
+  /// registration. The commands are not awaited, as closing does not wait for responses.
+  private func _deregisterUnsolicitedNotifications() async {
+    let registrations = _unsolicitedNotificationRegistrations.keys
+    _unsolicitedNotificationRegistrations = [:]
+    for targetEntityID in registrations {
+      guard let macAddress = _discovery.entity(id: targetEntityID)?.macAddress else { continue }
+      let sequenceID = _aecpSequenceID
+      _aecpSequenceID &+= 1
+      do {
+        try await endStation.send(.aecp(.aem(AemAecpdu(
+          isResponse: false,
+          targetEntityID: targetEntityID,
+          controllerEntityID: entityID,
+          sequenceID: sequenceID,
+          commandType: .deregisterUnsolicitedNotification
+        ))), to: EUI48(bytes: macAddress))
+      } catch {
+        _logger.debug("\(entityID): deregistering from \(targetEntityID) failed: \(error)")
+      }
+    }
   }
 
   // MARK: - AECP transactions
@@ -813,6 +914,8 @@ public actor Controller<Port: NetworkPort> {
       default: break
       }
     case .deregisterUnsolicitedNotification:
+      // the entity removed a registration that was not renewed in time (§7.4.37.2)
+      _unsolicitedNotificationRegistrations[id] = nil
       _yield(.deregisteredFromUnsolicitedNotifications(id))
     case let .getAvbInfo(descriptorType, descriptorIndex, avbInfo):
       guard descriptorType == .avbInterface else { break }
@@ -1140,14 +1243,16 @@ public extension Controller {
     _ = try await _aem(targetEntityID, .controllerAvailable)
   }
 
-  /// REGISTER_UNSOLICITED_NOTIFICATION (IEEE 1722.1-2021 §7.4.37).
+  /// REGISTER_UNSOLICITED_NOTIFICATION (IEEE 1722.1-2021 §7.4.37). The registration is time
+  /// limited and renewed every 100 seconds until it is deregistered, the entity goes offline or
+  /// the controller closes, which deregisters from every entity.
   func registerUnsolicitedNotifications(id targetEntityID: UniqueIdentifier) async throws {
-    _ = try await _aem(targetEntityID, .registerUnsolicitedNotification)
+    try await _registerUnsolicitedNotifications(targetEntityID)
   }
 
   /// DEREGISTER_UNSOLICITED_NOTIFICATION (IEEE 1722.1-2021 §7.4.38).
   func unregisterUnsolicitedNotifications(id targetEntityID: UniqueIdentifier) async throws {
-    _ = try await _aem(targetEntityID, .deregisterUnsolicitedNotification)
+    try await _deregisterUnsolicitedNotifications(targetEntityID)
   }
 
   // MARK: Configuration

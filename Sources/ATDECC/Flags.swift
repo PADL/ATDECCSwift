@@ -119,6 +119,16 @@ public struct LockEntityFlags: OptionSet, Sendable, Hashable {
   public static let unlock = LockEntityFlags(rawValue: 0x0000_0001)
 }
 
+/// REGISTER_UNSOLICITED_NOTIFICATION flags (IEEE 1722.1-2021 Table 7-147).
+public struct RegisterUnsolicitedNotificationFlags: OptionSet, Sendable, Hashable {
+  public let rawValue: UInt32
+  public init(rawValue: UInt32) { self.rawValue = rawValue }
+
+  /// The controller re-registers every 100 seconds, and the entity removes a registration
+  /// that is not renewed within 300 seconds (§7.4.37.2).
+  public static let timeLimited = RegisterUnsolicitedNotificationFlags(rawValue: 0x0000_0001)
+}
+
 /// AvbInfo flags (IEEE 1722.1-2021 §7.4.40.2).
 public struct AvbInfoFlags: OptionSet, Sendable, Hashable {
   public let rawValue: UInt8

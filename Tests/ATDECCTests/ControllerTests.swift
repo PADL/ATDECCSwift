@@ -392,6 +392,24 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  func testUnsolicitedNotificationRegistration() async throws {
+    let controller = try await makeController()
+    try await controller.registerUnsolicitedNotifications(id: entityID)
+    // registrations are time limited (IEEE 1722.1-2021 §7.4.37.2)
+    let register = await entity.firstReceived {
+      if case let .aecp(.aem(aem)) = $0 { !aem.isResponse && aem.commandType == .registerUnsolicitedNotification } else { false }
+    }
+    guard case let .aecp(.aem(registerCommand)) = register else { return XCTFail("no REGISTER_UNSOLICITED_NOTIFICATION") }
+    XCTAssertEqual(registerCommand.commandSpecificData, [0x00, 0x00, 0x00, 0x01])
+
+    // and removed on closing, for entities that do not time them out
+    await controller.close()
+    let deregister = await entity.firstReceived {
+      if case let .aecp(.aem(aem)) = $0 { !aem.isResponse && aem.commandType == .deregisterUnsolicitedNotification } else { false }
+    }
+    XCTAssertNotNil(deregister)
+  }
+
   func testUnsolicitedStreamFormatChange() async throws {
     let controller = try await makeController()
     let events = await controller.events()

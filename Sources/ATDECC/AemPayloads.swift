@@ -97,7 +97,7 @@ public enum AemCommandPayload: Sendable, Hashable {
   case getControl(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
   case startStreaming(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
   case stopStreaming(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
-  case registerUnsolicitedNotification
+  case registerUnsolicitedNotification(flags: RegisterUnsolicitedNotificationFlags)
   case deregisterUnsolicitedNotification
   case getAvbInfo(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
   case getAsPath(descriptorIndex: DescriptorIndex)
@@ -207,8 +207,10 @@ public enum AemCommandPayload: Sendable, Hashable {
       try context.serialize(descriptorType)
       context.serialize(uint16: descriptorIndex)
     case .entityAvailable, .controllerAvailable, .getConfiguration, .getAssociationID,
-         .registerUnsolicitedNotification, .deregisterUnsolicitedNotification:
+         .deregisterUnsolicitedNotification:
       break
+    case let .registerUnsolicitedNotification(flags):
+      context.serialize(uint32: flags.rawValue)
     case let .readDescriptor(configurationIndex, descriptorType, descriptorIndex):
       context.serialize(uint16: configurationIndex)
       context.serialize(uint16: 0) // reserved
@@ -410,7 +412,11 @@ public enum AemCommandPayload: Sendable, Hashable {
         let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
         return .stopStreaming(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
       case .registerUnsolicitedNotification:
-        return .registerUnsolicitedNotification
+        // a command without flags is from an entity predating IEEE 1722.1-2021 (§7.4.37.1)
+        guard !input.isEmpty else { return .registerUnsolicitedNotification(flags: []) }
+        return try .registerUnsolicitedNotification(
+          flags: RegisterUnsolicitedNotificationFlags(rawValue: UInt32(parsingBigEndian: &input))
+        )
       case .deregisterUnsolicitedNotification:
         return .deregisterUnsolicitedNotification
       case .getAvbInfo:
