@@ -24,17 +24,22 @@ let package = Package(
   ],
   dependencies: [
     .package(url: "https://github.com/PADL/IEEE802Swift", branch: "main"),
+    .package(url: "https://github.com/PADL/IORingSwift", from: "2.0.0"),
+    .package(url: "https://github.com/apple/swift-system", from: "1.2.1"),
     .package(url: "https://github.com/apple/swift-binary-parsing", from: "0.0.2"),
     .package(url: "https://github.com/apple/swift-log", from: "1.6.2"),
   ],
   targets: [
     // IEEE 1722.1 codecs (PDUs, AEM/MVU payloads, descriptors) and the controller runtime
-    // (network ports, end station, controller state machines).
+    // (Ethernet, serial and virtual network ports, end station, controller state machines).
     .target(
       name: "ATDECC",
       dependencies: [
         .product(name: "IEEE802", package: "IEEE802Swift"),
-        .product(name: "IEEE802Linux", package: "IEEE802Swift"),
+        .product(name: "IEEE802Linux", package: "IEEE802Swift", condition: .when(platforms: [.linux])),
+        .product(name: "IORing", package: "IORingSwift", condition: .when(platforms: [.linux])),
+        .product(name: "IORingUtils", package: "IORingSwift", condition: .when(platforms: [.linux])),
+        .product(name: "SystemPackage", package: "swift-system", condition: .when(platforms: [.linux])),
         .product(name: "BinaryParsing", package: "swift-binary-parsing"),
         .product(name: "Logging", package: "swift-log"),
       ],
@@ -54,6 +59,7 @@ let package = Package(
       dependencies: [
         "ATDECC",
         .product(name: "BinaryParsing", package: "swift-binary-parsing"),
+        .product(name: "IORing", package: "IORingSwift", condition: .when(platforms: [.linux])),
       ],
       swiftSettings: CommonSwiftSettings
     ),

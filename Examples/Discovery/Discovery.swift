@@ -20,8 +20,8 @@ import Logging
 import Glibc
 #endif
 
-/// Discovers ATDECC entities on an Ethernet interface and prints each one's ENTITY
-/// descriptor.
+/// Discovers ATDECC entities on an Ethernet interface, or on a serial device given as
+/// `path[@baud]`, and prints each one's ENTITY descriptor.
 @main
 enum Discovery {
   static func main() async throws {
@@ -32,21 +32,34 @@ enum Discovery {
     }
 
     guard CommandLine.arguments.count == 2 else {
-      print("Usage: \(CommandLine.arguments[0]) interface")
+      print("Usage: \(CommandLine.arguments[0]) interface|/dev/tty[@baud]")
       exit(1)
     }
 
-    let controller: Controller<EthernetPort>
+    let name = CommandLine.arguments[1]
     do {
-      let endStation = try EndStation(port: EthernetPort(interfaceName: CommandLine.arguments[1]))
-      controller = try await Controller(
-        endStation: endStation,
-        entityID: endStation.makeDynamicEntityID()
-      )
+      if name.hasPrefix("/") {
+        let components = name.split(separator: "@", maxSplits: 1)
+        guard let baudRate = components.count == 2 ? Int(components[1]) : 115_200 else {
+          print("invalid baud rate in \(name)")
+          exit(1)
+        }
+        try await discover(on: SerialPort(path: String(components[0]), baudRate: baudRate))
+      } else {
+        try await discover(on: EthernetPort(interfaceName: name))
+      }
     } catch {
-      print("failed to open \(CommandLine.arguments[1]): \(error)")
+      print("failed to open \(name): \(error)")
       exit(2)
     }
+  }
+
+  private static func discover<Port: NetworkPort>(on port: Port) async throws {
+    let endStation = EndStation(port: port)
+    let controller = try await Controller(
+      endStation: endStation,
+      entityID: endStation.makeDynamicEntityID()
+    )
     print("controller \(controller.entityID)")
 
     for await event in await controller.events() {
