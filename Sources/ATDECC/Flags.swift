@@ -39,6 +39,7 @@ public struct EntityCapabilities: OptionSet, Sendable, Hashable {
   public static let aemInterfaceIndexValid = EntityCapabilities(rawValue: 1 << 15)
   public static let generalControllerIgnore = EntityCapabilities(rawValue: 1 << 16)
   public static let entityNotReady = EntityCapabilities(rawValue: 1 << 17)
+  public static let aemConfigurationIndexValid = EntityCapabilities(rawValue: 1 << 25)
 }
 
 /// ADP Talker Capabilities (IEEE 1722.1-2021 §6.2.2.11).
