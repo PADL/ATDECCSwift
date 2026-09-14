@@ -96,8 +96,10 @@ public struct StreamFormat: CustomStringConvertible, Equatable, Hashable, Sendab
     UInt8((_format >> 40) & 0xFF)
   }
 
+  // fdf_evt is the most-significant 5 bits of FDF, fdf_sfc the least-significant 3
+  // (IEEE 1722-2016 §I.2.2.3.3)
   private var iec61883_6_fdf_evt: iec_61883_6_fdf_evt? {
-    iec_61883_6_fdf_evt(rawValue: iec61883_6_fdf & 0xF8)
+    iec_61883_6_fdf_evt(rawValue: iec61883_6_fdf >> 3)
   }
 
   private var iec61883_6_fdf_sfc: iec_61883_6_fdf_sfc? {
@@ -184,7 +186,7 @@ public struct StreamFormat: CustomStringConvertible, Equatable, Hashable, Sendab
   }
 
   private var aafFormat: AafFormat? {
-    AafFormat(rawValue: UInt8((_format >> 40) & 0xF))
+    AafFormat(rawValue: UInt8((_format >> 40) & 0xFF))
   }
 
   private var aafBitDepth: Int {

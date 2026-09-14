@@ -99,15 +99,27 @@ extension AudioMapping: SerDes {
   }
 }
 
-/// Probing status of a Milan listener stream (Milan 1.3 §5.4.4.8).
+/// Probing status of a Milan listener stream (Milan 1.3 §5.3.8.6). Codes 4 to 7 are reserved.
 public enum ProbingStatus: UInt8, Sendable {
   case disabled = 0
   case passive = 1
   case active = 2
   case completed = 3
+}
 
-  public init(_ raw: UInt8) {
-    self = Self(rawValue: raw) ?? .disabled
+/// The octet holding a 3-bit probing_status and a 5-bit acmp_status, in GET_STREAM_INFO
+/// (Milan 1.3 §5.4.2.9) and GET_STREAM_INPUT_INFO_EX (Milan 1.3 §5.4.4.8) responses. The
+/// codes are kept as received, since either may be reserved.
+struct ProbingAcmpStatus {
+  static let probingStatusShift = 5
+  static let acmpStatusMask: UInt8 = 0x1F
+
+  let probingStatusRaw: UInt8
+  let acmpStatusRaw: UInt8
+
+  init(_ octet: UInt8) {
+    probingStatusRaw = octet >> Self.probingStatusShift
+    acmpStatusRaw = octet & Self.acmpStatusMask
   }
 }
 
@@ -127,8 +139,22 @@ public struct StreamInfo: Sendable, Hashable, CustomStringConvertible {
   public var msrpFailureCode: UInt8
   public var msrpFailureBridgeID: UInt64
   public var streamInfoFlagsEx: StreamInfoFlagsEx?
-  public var probingStatus: ProbingStatus?
-  public var acmpStatus: AcmpStatus?
+  /// probing_status as received, reserved codes included; nil when the entity does not report
+  /// it.
+  public var probingStatusRaw: UInt8?
+  /// acmp_status as received, reserved codes included; nil when the entity does not report it.
+  public var acmpStatusRaw: UInt8?
+
+  /// `probingStatusRaw`, or nil when that is not reported or is a reserved code.
+  public var probingStatus: ProbingStatus? {
+    probingStatusRaw.flatMap { ProbingStatus(rawValue: $0) }
+  }
+
+  /// `acmpStatusRaw`, which `AcmpStatus` represents for every five-bit code, reserved codes
+  /// included; nil when that is not reported.
+  public var acmpStatus: AcmpStatus? {
+    acmpStatusRaw.flatMap { AcmpStatus(rawValue: UInt16($0)) }
+  }
 
   public init(
     streamFormat: StreamFormat = StreamFormat(format: 0),
@@ -140,8 +166,8 @@ public struct StreamInfo: Sendable, Hashable, CustomStringConvertible {
     msrpFailureCode: UInt8 = 0,
     msrpFailureBridgeID: UInt64 = 0,
     streamInfoFlagsEx: StreamInfoFlagsEx? = nil,
-    probingStatus: ProbingStatus? = nil,
-    acmpStatus: AcmpStatus? = nil
+    probingStatusRaw: UInt8? = nil,
+    acmpStatusRaw: UInt8? = nil
   ) {
     self.streamFormat = streamFormat
     self.streamID = streamID
@@ -152,8 +178,8 @@ public struct StreamInfo: Sendable, Hashable, CustomStringConvertible {
     self.msrpFailureCode = msrpFailureCode
     self.msrpFailureBridgeID = msrpFailureBridgeID
     self.streamInfoFlagsEx = streamInfoFlagsEx
-    self.probingStatus = probingStatus
-    self.acmpStatus = acmpStatus
+    self.probingStatusRaw = probingStatusRaw
+    self.acmpStatusRaw = acmpStatusRaw
   }
 
   public var description: String {
@@ -170,23 +196,36 @@ public struct StreamInfo: Sendable, Hashable, CustomStringConvertible {
 /// stream is bound to, and the probing and ACMP states it has reached.
 public struct StreamInputInfoEx: Sendable, Hashable, CustomStringConvertible {
   public let talkerStream: StreamIdentification
-  public let probingStatus: ProbingStatus
-  public let acmpStatus: AcmpStatus
+  /// probing_status as received, reserved codes included.
+  public let probingStatusRaw: UInt8
+  /// acmp_status as received, reserved codes included.
+  public let acmpStatusRaw: UInt8
+
+  /// `probingStatusRaw`, or nil for a reserved code.
+  public var probingStatus: ProbingStatus? {
+    ProbingStatus(rawValue: probingStatusRaw)
+  }
+
+  /// `acmpStatusRaw`, which `AcmpStatus` represents for every five-bit code, reserved codes
+  /// included.
+  public var acmpStatus: AcmpStatus? {
+    AcmpStatus(rawValue: UInt16(acmpStatusRaw))
+  }
 
   public init(
     talkerStream: StreamIdentification,
-    probingStatus: ProbingStatus,
-    acmpStatus: AcmpStatus
+    probingStatusRaw: UInt8,
+    acmpStatusRaw: UInt8
   ) {
     self.talkerStream = talkerStream
-    self.probingStatus = probingStatus
-    self.acmpStatus = acmpStatus
+    self.probingStatusRaw = probingStatusRaw
+    self.acmpStatusRaw = acmpStatusRaw
   }
 
   public var description: String {
     "StreamInputInfoEx(talker: \(talkerStream)" +
-      ", probing: \(probingStatus)" +
-      ", acmp: \(acmpStatus.rawValue))"
+      ", probing: \(probingStatusRaw)" +
+      ", acmp: \(acmpStatusRaw))"
   }
 }
 
@@ -354,15 +393,24 @@ public struct MilanInfo: Sendable, Hashable {
 /// Media clock reference priority (Milan 1.3 §5.4.4.4).
 public typealias MediaClockReferencePriority = UInt8
 
-/// Default media clock reference priorities (Milan 1.3 §5.4.4.4).
-public enum DefaultMediaClockReferencePriority: UInt8, Sendable {
-  case `default` = 0xF8
-  case userVariableInternal = 0xFE
-  case userVariableExternal = 0xFF
-
-  public init(_ raw: UInt8) {
-    self = Self(rawValue: raw) ?? .default
-  }
+/// Default media clock reference priorities by device category (Milan 1.3 §5.4.4.4). An
+/// entity may report any `MediaClockReferencePriority`, so responses carry the raw value.
+public enum DefaultMediaClockReferencePriority: MediaClockReferencePriority, Sendable {
+  case highest = 255
+  case dedicatedGenerators = 240
+  case matrixMixingDevices = 224
+  case mixingConsoles = 208
+  case stageboxes = 192
+  case processors = 176
+  case amplifiers = 160
+  case recordingDevices = 144
+  /// The priority of an entity that provides no data.
+  case `default` = 128
+  case effectProcessingDevices = 112
+  case wirelessReceivers = 80
+  case microphones = 64
+  case instruments = 48
+  case lowest = 0
 }
 
 /// SET/GET_MEDIA_CLOCK_REFERENCE_INFO fields (Milan 1.3 §5.4.4.4). `nil` means the field is

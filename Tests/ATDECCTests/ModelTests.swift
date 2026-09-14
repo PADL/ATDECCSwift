@@ -30,6 +30,33 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(format.channelsPerFrame, 8)
   }
 
+  func test61883_6FloatFormat() {
+    // sf 1, fmt 0x10, fdf_evt 0b00100 (32-bit floating point), fdf_sfc 48 kHz, dbs 8, nb
+    let format = StreamFormat(format: 0x00A0_2208_4000_0000)
+    XCTAssertEqual(format.isFloatingPoint, true)
+    XCTAssertEqual(format.sampleRate, 48000)
+    XCTAssertEqual(format.bitDepth, 32)
+    XCTAssertEqual(format.channelsPerFrame, 8)
+  }
+
+  func test61883_6Int32Format() {
+    // sf 1, fmt 0x10, fdf_evt 0b00110 (32-bit fixed point), fdf_sfc 96 kHz, dbs 2, nb
+    let format = StreamFormat(format: 0x00A0_3402_4000_0000)
+    XCTAssertEqual(format.isFloatingPoint, false)
+    XCTAssertEqual(format.sampleRate, 96000)
+    XCTAssertEqual(format.bitDepth, 32)
+    XCTAssertEqual(format.channelsPerFrame, 2)
+  }
+
+  func testAafReservedFormat() {
+    // format is an octet: 0x11 and 0x12 are reserved, not FLOAT_32BIT and INT_32BIT
+    let reservedFloat = StreamFormat(format: 0x0205_1120_0040_6000)
+    XCTAssertEqual(reservedFloat.isFloatingPoint, false)
+    XCTAssertNil(reservedFloat.bitDepth)
+    let reservedInt = StreamFormat(format: 0x0205_1220_0040_6000)
+    XCTAssertNil(reservedInt.bitDepth)
+  }
+
   func testAafFormatString() {
     let format = StreamFormat(format: 0x0205_0220_0040_6000)
     XCTAssertEqual(format.version, .version_0)
@@ -141,7 +168,7 @@ final class ModelTests: XCTestCase {
   func testCounterValidFlags() {
     let streamFlags: StreamInputCounterValidFlags = [.mediaLocked, .framesRx]
     XCTAssertTrue(streamFlags.contains(.framesRx))
-    XCTAssertFalse(streamFlags.contains(.streamReset))
+    XCTAssertFalse(streamFlags.contains(.streamInterrupted))
     let interfaceFlags: AvbInterfaceCounterValidFlags = [.linkUp, .framesTx]
     XCTAssertTrue(interfaceFlags.contains(.linkUp))
     XCTAssertFalse(interfaceFlags.contains(.linkDown))
@@ -165,15 +192,18 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(flags.rawValue, 1)
   }
 
-  func testProbingStatusUnknownDefaults() {
-    XCTAssertEqual(ProbingStatus(99), .disabled)
-    XCTAssertEqual(ProbingStatus(2), .active)
+  func testProbingStatusReservedCodes() {
+    XCTAssertEqual(ProbingStatus(rawValue: 2), .active)
+    XCTAssertNil(ProbingStatus(rawValue: 4))
   }
 
   func testDefaultMediaClockReferencePriority() {
-    XCTAssertEqual(DefaultMediaClockReferencePriority(0xF8), .default)
-    XCTAssertEqual(DefaultMediaClockReferencePriority(0xFF), .userVariableExternal)
-    XCTAssertEqual(DefaultMediaClockReferencePriority(0x10), .default)
+    // Milan 1.3 §5.4.4.4
+    XCTAssertEqual(DefaultMediaClockReferencePriority.highest.rawValue, 255)
+    XCTAssertEqual(DefaultMediaClockReferencePriority.amplifiers.rawValue, 160)
+    XCTAssertEqual(DefaultMediaClockReferencePriority.default.rawValue, 128)
+    XCTAssertEqual(DefaultMediaClockReferencePriority.lowest.rawValue, 0)
+    XCTAssertNil(DefaultMediaClockReferencePriority(rawValue: 0x10))
   }
 
   func testMediaClockReferenceInfoOptionals() {

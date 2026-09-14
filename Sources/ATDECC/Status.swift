@@ -64,8 +64,23 @@ public enum AcmpStatus: UInt16, Error {
   case couldNotSendMessage = 12
   case talkerMisbehaving = 13
   case listenerMisbehaving = 14
+  // every five-bit status code has a case, so that a status from an entity is never lost
+  case reserved15 = 15
   case controllerNotAuthorized = 16
   case incompatibleRequest = 17
+  case listenerInvalidConnection = 18
+  case listenerCanOnlyListenOnce = 19
+  case reserved20 = 20
+  case reserved21 = 21
+  case reserved22 = 22
+  case reserved23 = 23
+  case reserved24 = 24
+  case reserved25 = 25
+  case reserved26 = 26
+  case reserved27 = 27
+  case reserved28 = 28
+  case reserved29 = 29
+  case reserved30 = 30
   case notSupported = 31
   case baseProtocolViolation = 991
   case networkError = 995
@@ -74,6 +89,8 @@ public enum AcmpStatus: UInt16, Error {
   case unknownEntity = 998
   case internalError = 999
 
+  /// Every five-bit status from an entity maps to its own case; only values outside that range
+  /// collapse to `.internalError`.
   public init(_ raw: UInt16) {
     self = Self(rawValue: raw) ?? .internalError
   }

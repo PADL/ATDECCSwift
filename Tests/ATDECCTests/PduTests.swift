@@ -67,6 +67,21 @@ final class PduTests: XCTestCase {
     XCTAssertEqual(try adpdu.serialized(), entityAvailable)
   }
 
+  func testAdpduCurrentConfigurationIndex() throws {
+    var bytes = entityAvailable
+    // entity_capabilities: AEM_CONFIGURATION_INDEX_VALID (bit 6) | AEM | CLASS_A | GPTP
+    bytes[20...23] = [0x02, 0x00, 0x05, 0x08]
+    // gptp_domain_number 5, reserved0, current_configuration_index 3 (IEEE 1722.1-2021 §6.2.1)
+    bytes[48...51] = [0x05, 0x00, 0x00, 0x03]
+    guard case let .adp(adpdu) = try parse(bytes) else {
+      return XCTFail("expected ADPDU")
+    }
+    XCTAssertTrue(adpdu.entityCapabilities.contains(.aemConfigurationIndexValid))
+    XCTAssertEqual(adpdu.gptpDomainNumber, 5)
+    XCTAssertEqual(adpdu.currentConfigurationIndex, 3)
+    XCTAssertEqual(try adpdu.serialized(), bytes)
+  }
+
   func testAdpduIgnoresEthernetPadding() throws {
     // frames shorter than the Ethernet minimum are padded; control_data_length bounds the PDU
     guard case .adp = try parse(entityAvailable + [0, 0, 0, 0]) else {
@@ -145,5 +160,27 @@ final class PduTests: XCTestCase {
     XCTAssertEqual(bytes[1], AecpMessageType.vendorUniqueCommand.rawValue)
     XCTAssertEqual(Array(bytes[22..<28]), [0x00, 0x1B, 0xC5, 0x0A, 0xC1, 0x00])
     XCTAssertEqual(try parse(bytes), .aecp(.mvu(mvu)))
+  }
+}
+
+extension PduTests {
+  func testAemControllerRequestFlag() throws {
+    var aem = AemAecpdu(
+      isResponse: true,
+      targetEntityID: UniqueIdentifier(1),
+      controllerEntityID: UniqueIdentifier(2),
+      unsolicited: true,
+      commandType: .setName
+    )
+    aem.controllerRequest = true
+    let bytes = try AvdeccPdu.aecp(.aem(aem)).serialized()
+    // u, cr and the 14-bit command_type follow the AVTP control header, controller_entity_id and
+    // sequence_id (IEEE 1722.1-2021 §9.3.2)
+    XCTAssertEqual(Array(bytes[22..<24]), [0xC0, 0x10])
+
+    guard case let .aecp(.aem(parsed)) = try parse(bytes) else { return XCTFail("not an AEM AECPDU") }
+    XCTAssertEqual(parsed.commandType, .setName)
+    XCTAssertTrue(parsed.unsolicited)
+    XCTAssertTrue(parsed.controllerRequest)
   }
 }

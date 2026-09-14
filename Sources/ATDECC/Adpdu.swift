@@ -43,6 +43,8 @@ public struct Adpdu: Sendable, Hashable {
   public var availableIndex: UInt32
   public var gptpGrandmasterID: UniqueIdentifier
   public var gptpDomainNumber: UInt8
+  /// The current CONFIGURATION, valid when `aemConfigurationIndexValid` is set.
+  public var currentConfigurationIndex: UInt16
   public var identifyControlIndex: UInt16
   public var interfaceIndex: UInt16
   public var associationID: UniqueIdentifier
@@ -61,6 +63,7 @@ public struct Adpdu: Sendable, Hashable {
     availableIndex: UInt32 = 0,
     gptpGrandmasterID: UniqueIdentifier = UniqueIdentifier(),
     gptpDomainNumber: UInt8 = 0,
+    currentConfigurationIndex: UInt16 = 0,
     identifyControlIndex: UInt16 = 0,
     interfaceIndex: UInt16 = 0,
     associationID: UniqueIdentifier = UniqueIdentifier()
@@ -78,6 +81,7 @@ public struct Adpdu: Sendable, Hashable {
     self.availableIndex = availableIndex
     self.gptpGrandmasterID = gptpGrandmasterID
     self.gptpDomainNumber = gptpDomainNumber
+    self.currentConfigurationIndex = currentConfigurationIndex
     self.identifyControlIndex = identifyControlIndex
     self.interfaceIndex = interfaceIndex
     self.associationID = associationID
@@ -106,8 +110,9 @@ extension Adpdu: SerDes {
       try ControllerCapabilities(rawValue: UInt32(parsingBigEndian: &input))
     availableIndex = try UInt32(parsingBigEndian: &input)
     gptpGrandmasterID = try UniqueIdentifier(parsing: &input)
-    let gptpDomainNumberReserved = try UInt32(parsingBigEndian: &input)
-    gptpDomainNumber = UInt8(gptpDomainNumberReserved >> 24)
+    gptpDomainNumber = try UInt8(parsing: &input)
+    _ = try UInt8(parsing: &input) // reserved0
+    currentConfigurationIndex = try UInt16(parsingBigEndian: &input)
     identifyControlIndex = try UInt16(parsingBigEndian: &input)
     interfaceIndex = try UInt16(parsingBigEndian: &input)
     associationID = try UniqueIdentifier(parsing: &input)
@@ -132,7 +137,9 @@ extension Adpdu: SerDes {
     serializationContext.serialize(uint32: controllerCapabilities.rawValue)
     serializationContext.serialize(uint32: availableIndex)
     try serializationContext.serialize(gptpGrandmasterID)
-    serializationContext.serialize(uint32: UInt32(gptpDomainNumber) << 24)
+    serializationContext.serialize(uint8: gptpDomainNumber)
+    serializationContext.serialize(uint8: 0) // reserved0
+    serializationContext.serialize(uint16: currentConfigurationIndex)
     serializationContext.serialize(uint16: identifyControlIndex)
     serializationContext.serialize(uint16: interfaceIndex)
     try serializationContext.serialize(associationID)

@@ -25,6 +25,8 @@
 /// between other controllers, talkers and listeners (IEEE 1722.1-2021 §8.2).
 public enum ControllerEvent: Sendable {
   case transportError
+  /// Entities advertising GENERAL_CONTROLLER_IGNORE (IEEE 1722.1-2021 Table 6-2) are
+  /// reported too; a general-purpose controller should not present them.
   case entityOnline(UniqueIdentifier)
   case entityUpdated(UniqueIdentifier)
   case entityOffline(UniqueIdentifier)
@@ -93,7 +95,7 @@ public enum ControllerEvent: Sendable {
   case operationStatus(UniqueIdentifier, descriptorType: UInt16, descriptorIndex: UInt16, operationID: UInt16, percentComplete: UInt16)
 
   case systemUniqueIDChanged(UniqueIdentifier, systemUniqueID: UniqueIdentifier, systemName: String)
-  case mediaClockReferenceInfoChanged(UniqueIdentifier, clockDomainIndex: UInt16, defaultPriority: DefaultMediaClockReferencePriority, info: MediaClockReferenceInfo)
+  case mediaClockReferenceInfoChanged(UniqueIdentifier, clockDomainIndex: UInt16, defaultPriority: MediaClockReferencePriority, info: MediaClockReferenceInfo)
   case bindStream(UniqueIdentifier, streamIndex: UInt16, talker: StreamIdentification, flags: BindStreamFlags)
   case unbindStream(UniqueIdentifier, streamIndex: UInt16)
   case streamInputInfoExChanged(UniqueIdentifier, streamIndex: UInt16, info: StreamInputInfoEx)

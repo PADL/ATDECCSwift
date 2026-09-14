@@ -115,7 +115,7 @@ public enum AemCommandType: UInt16, Sendable, CaseIterable {
   case getDynamicInfo = 0x004B
   case setMaxTransitTime = 0x004C
   case getMaxTransitTime = 0x004D
-  case expansion = 0x7FFF
+  case expansion = 0x3FFF
   case invalidCommandType = 0xFFFF
 }
 
@@ -141,8 +141,13 @@ public let MvuProtocolIdentifier: UInt64 = 0x001B_C50A_C100
 
 // AECP common header following the AVTP control header: controller_entity_id, sequence_id.
 private let _aecpduHeaderLength = 10
-// unsolicited flag and command_type.
+// u (unsolicited) and cr (controller request) flags and command_type.
 private let _commandTypeLength = 2
+private let _unsolicitedFlag: UInt16 = 0x8000
+private let _controllerRequestFlag: UInt16 = 0x4000
+// AEM command_type is 14 bits (IEEE 1722.1-2021 §9.3.2); MVU command_type is 15
+private let _aemCommandTypeMask: UInt16 = 0x3FFF
+private let _mvuCommandTypeMask: UInt16 = 0x7FFF
 // Vendor Unique protocol_id.
 private let _protocolIdentifierLength = 6
 
@@ -155,7 +160,11 @@ public struct AemAecpdu: Sendable, Hashable, CustomStringConvertible {
   public var controllerEntityID: UniqueIdentifier
   public var sequenceID: UInt16
   public var unsolicited: Bool
-  /// The raw 15-bit command_type, preserved when it isn't a known `AemCommandType`.
+  /// The cr flag (IEEE 1722.1-2021 §9.3.2.2): set in an unsolicited response that asks the
+  /// controller to execute its command on the entity, as when a user changes the entity's
+  /// sampling rate from its front panel.
+  public var controllerRequest = false
+  /// The raw 14-bit command_type, preserved when it isn't a known `AemCommandType`.
   public var commandTypeRaw: UInt16
   public var commandSpecificData: [UInt8]
 
@@ -191,7 +200,7 @@ public struct AemAecpdu: Sendable, Hashable, CustomStringConvertible {
   public var description: String {
     "AemAecpdu(target: \(targetEntityID), controller: \(controllerEntityID)" +
       ", seq: \(sequenceID), commandType: \(commandType), status: \(status)" +
-      (unsolicited ? ", unsolicited" : "") + ")"
+      (unsolicited ? ", unsolicited" : "") + (controllerRequest ? ", controller request" : "") + ")"
   }
 }
 
@@ -309,18 +318,20 @@ extension Aecpdu: SerDes {
       guard specificDataLength >= _commandTypeLength else {
         throw AvdeccCodecError.invalidControlDataLength(header.controlDataLength)
       }
-      let unsolicitedCommandType = try UInt16(parsingBigEndian: &input)
+      let flagsCommandType = try UInt16(parsingBigEndian: &input)
       specificDataLength -= _commandTypeLength
-      self = try .aem(AemAecpdu(
+      var aem = try AemAecpdu(
         isResponse: header.controlData == AecpMessageType.aemResponse.rawValue,
         status: header.status,
         targetEntityID: targetEntityID,
         controllerEntityID: controllerEntityID,
         sequenceID: sequenceID,
-        unsolicited: unsolicitedCommandType & 0x8000 != 0,
-        commandTypeRaw: unsolicitedCommandType & 0x7FFF,
+        unsolicited: flagsCommandType & _unsolicitedFlag != 0,
+        commandTypeRaw: flagsCommandType & _aemCommandTypeMask,
         commandSpecificData: [UInt8](parsing: &input, byteCount: specificDataLength)
-      ))
+      )
+      aem.controllerRequest = flagsCommandType & _controllerRequestFlag != 0
+      self = .aem(aem)
     case .vendorUniqueCommand, .vendorUniqueResponse:
       guard specificDataLength >= _protocolIdentifierLength else {
         throw AvdeccCodecError.invalidControlDataLength(header.controlDataLength)
@@ -339,8 +350,8 @@ extension Aecpdu: SerDes {
           targetEntityID: targetEntityID,
           controllerEntityID: controllerEntityID,
           sequenceID: sequenceID,
-          unsolicited: unsolicitedCommandType & 0x8000 != 0,
-          commandTypeRaw: unsolicitedCommandType & 0x7FFF,
+          unsolicited: unsolicitedCommandType & _unsolicitedFlag != 0,
+          commandTypeRaw: unsolicitedCommandType & _mvuCommandTypeMask,
           commandSpecificData: [UInt8](parsing: &input, byteCount: specificDataLength)
         ))
       } else {
@@ -379,7 +390,11 @@ extension Aecpdu: SerDes {
     case let .aem(aem):
       messageType = aem.messageType.rawValue
       status = aem.status
-      specificData.serialize(uint16: (aem.unsolicited ? 0x8000 : 0) | (aem.commandTypeRaw & 0x7FFF))
+      specificData.serialize(
+        uint16: (aem.unsolicited ? _unsolicitedFlag : 0) |
+          (aem.controllerRequest ? _controllerRequestFlag : 0) |
+          (aem.commandTypeRaw & _aemCommandTypeMask)
+      )
       specificData.serialize(aem.commandSpecificData)
     case let .mvu(mvu):
       messageType = mvu.messageType.rawValue
@@ -387,7 +402,9 @@ extension Aecpdu: SerDes {
       var protocolIdentifier = SerializationContext()
       protocolIdentifier.serialize(uint64: MvuProtocolIdentifier)
       specificData.serialize(Array(protocolIdentifier.bytes.suffix(_protocolIdentifierLength)))
-      specificData.serialize(uint16: (mvu.unsolicited ? 0x8000 : 0) | (mvu.commandTypeRaw & 0x7FFF))
+      specificData.serialize(
+        uint16: (mvu.unsolicited ? _unsolicitedFlag : 0) | (mvu.commandTypeRaw & _mvuCommandTypeMask)
+      )
       specificData.serialize(mvu.commandSpecificData)
     case let .other(otherMessageType, otherStatus, _, _, _, data):
       messageType = otherMessageType

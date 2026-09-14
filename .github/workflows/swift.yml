@@ -8,14 +8,18 @@ on:
 jobs:
   linux:
     runs-on: ubuntu-24.04
-    container: swift:6.3
+    container:
+      image: swift:6.3
+      # Docker's default seccomp profile blocks io_uring, which the serial port tests use
+      options: --security-opt seccomp=unconfined
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Packages
         run: |
           apt-get update
-          apt-get install -y liburing-dev
+          apt-get install -y liburing-dev pkg-config libnl-3-dev libnl-route-3-dev libnl-nf-3-dev \
+            libnl-genl-3-dev libmnl-dev libnftnl-dev
       - name: Fix permissions
         run: chown -R $(id -u):$(id -g) $PWD
       - name: Version

@@ -157,12 +157,12 @@ public enum MvuResponsePayload: Sendable, Hashable {
   case getSystemUniqueID(systemUniqueID: UniqueIdentifier, systemName: String)
   case setMediaClockReferenceInfo(
     clockDomainIndex: UInt16,
-    defaultPriority: DefaultMediaClockReferencePriority,
+    defaultPriority: MediaClockReferencePriority,
     info: MediaClockReferenceInfo
   )
   case getMediaClockReferenceInfo(
     clockDomainIndex: UInt16,
-    defaultPriority: DefaultMediaClockReferencePriority,
+    defaultPriority: MediaClockReferencePriority,
     info: MediaClockReferenceInfo
   )
   case bindStream(
@@ -213,14 +213,14 @@ public enum MvuResponsePayload: Sendable, Hashable {
         let fields = try _parseMediaClockReferenceInfo(&input)
         return .setMediaClockReferenceInfo(
           clockDomainIndex: fields.clockDomainIndex,
-          defaultPriority: DefaultMediaClockReferencePriority(fields.defaultPriority),
+          defaultPriority: fields.defaultPriority,
           info: fields.info
         )
       case .getMediaClockReferenceInfo:
         let fields = try _parseMediaClockReferenceInfo(&input)
         return .getMediaClockReferenceInfo(
           clockDomainIndex: fields.clockDomainIndex,
-          defaultPriority: DefaultMediaClockReferencePriority(fields.defaultPriority),
+          defaultPriority: fields.defaultPriority,
           info: fields.info
         )
       case .bindStream:
@@ -245,15 +245,15 @@ public enum MvuResponsePayload: Sendable, Hashable {
           entityID: UniqueIdentifier(parsing: &input),
           streamIndex: UInt16(parsingBigEndian: &input)
         )
-        let probingAcmpStatus = try UInt8(parsing: &input)
+        let probingAcmpStatus = try ProbingAcmpStatus(UInt8(parsing: &input))
         _ = try UInt8(parsing: &input) // reserved
         return .getStreamInputInfoEx(
           descriptorType: descriptorType,
           descriptorIndex: descriptorIndex,
           info: StreamInputInfoEx(
             talkerStream: talkerStream,
-            probingStatus: ProbingStatus(probingAcmpStatus >> 5),
-            acmpStatus: AcmpStatus(UInt16(probingAcmpStatus & 0x1F))
+            probingStatusRaw: probingAcmpStatus.probingStatusRaw,
+            acmpStatusRaw: probingAcmpStatus.acmpStatusRaw
           )
         )
       default:

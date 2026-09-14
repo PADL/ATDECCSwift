@@ -43,6 +43,12 @@ final class Promise<Value: Sendable>: Sendable {
     return true
   }
 
+  var isResolved: Bool {
+    _state.withLock { state in
+      if case .resolved = state { true } else { false }
+    }
+  }
+
   var value: Value {
     get async throws {
       try await withCheckedThrowingContinuation { continuation in

@@ -57,6 +57,7 @@ public actor EndStation<Port: NetworkPort> {
   private var _controllers = [UniqueIdentifier: ControllerReference]()
   private var _dynamicEntityIDs = Set<UInt16>()
   private var _receiveTask: Task<(), Never>?
+  private var _linkStateTask: Task<(), Never>?
   private var _isClosed = false
 
   public init(port: Port, logger: Logger = Logger(label: "com.padl.AVDECCSwift")) {
@@ -66,6 +67,7 @@ public actor EndStation<Port: NetworkPort> {
 
   deinit {
     _receiveTask?.cancel()
+    _linkStateTask?.cancel()
   }
 
   public nonisolated var macAddress: EUI48 {
@@ -77,6 +79,8 @@ public actor EndStation<Port: NetworkPort> {
     _isClosed = true
     _receiveTask?.cancel()
     _receiveTask = nil
+    _linkStateTask?.cancel()
+    _linkStateTask = nil
     _controllers = [:]
   }
 
@@ -113,7 +117,7 @@ public actor EndStation<Port: NetworkPort> {
       throw EndStationError.duplicateEntityID(controller.entityID)
     }
     _controllers[controller.entityID] = ControllerReference(controller: controller)
-    _startReceiving()
+    _startMonitoringLinkState()
   }
 
   func unregister(_ entityID: UniqueIdentifier) {
@@ -153,23 +157,74 @@ public actor EndStation<Port: NetworkPort> {
 
   // MARK: - Receive
 
+  /// Receives on the port while its link is up, receiving again whenever reception ends: a port
+  /// can stop receiving (an AF_PACKET socket fails with ENETDOWN when its interface goes down, a
+  /// serial device with EIO when it hangs up), and the entities on the end station would
+  /// otherwise hear nothing more.
   private func _startReceiving() {
-    guard _receiveTask == nil else { return }
+    guard !_isClosed, _receiveTask == nil else { return }
     let port = port
     _receiveTask = Task { [weak self] in
-      do {
-        try await port.receive { packet in
-          await self?._handle(packet)
+      while !Task.isCancelled {
+        var failure: (any Error)?
+        do {
+          try await port.receive { packet in
+            await self?._handle(packet)
+          }
+        } catch {
+          failure = error
         }
-      } catch {
-        await self?._receiveFailed(error)
+        guard !Task.isCancelled, let self else { return }
+        await _receiveEnded(failure: failure)
       }
     }
   }
 
-  private func _receiveFailed(_ error: any Error) async {
+  private func _stopReceiving() {
+    _receiveTask?.cancel()
+    _receiveTask = nil
+  }
+
+  private func _startMonitoringLinkState() {
+    guard !_isClosed, _linkStateTask == nil else { return }
+    let port = port
+    _linkStateTask = Task { [weak self] in
+      do {
+        try await port.monitorLinkState { isUp in
+          await self?._handleLinkState(isUp)
+        }
+      } catch {
+        await self?._linkStateMonitoringFailed(error)
+      }
+    }
+  }
+
+  private func _handleLinkState(_ isUp: Bool) async {
+    logger.debug("end station \(_macAddressToString(macAddress)): link \(isUp ? "up" : "down")")
+    if isUp {
+      _startReceiving()
+    } else {
+      _stopReceiving()
+    }
+    for controller in _liveControllers {
+      await controller._handleLinkState(isUp: isUp)
+    }
+  }
+
+  /// Without link state, the link is taken to be up, so that the end station still receives.
+  private func _linkStateMonitoringFailed(_ error: any Error) {
     guard !Task.isCancelled, !_isClosed else { return }
-    logger.error("end station \(_macAddressToString(macAddress)): receive failed: \(error)")
+    logger.warning("end station \(_macAddressToString(macAddress)): cannot monitor link state: \(error)")
+    _startReceiving()
+  }
+
+  private func _receiveEnded(failure: (any Error)?) async {
+    guard !_isClosed else { return }
+    if let failure {
+      logger.error("end station \(_macAddressToString(macAddress)): receive failed: \(failure)")
+    } else {
+      logger.error("end station \(_macAddressToString(macAddress)): reception ended")
+    }
     for controller in _liveControllers {
       await controller._handleTransportError()
     }
@@ -189,7 +244,7 @@ public actor EndStation<Port: NetworkPort> {
     switch pdu {
     case let .adp(adpdu):
       // our own entities' advertisements are not discoveries
-      guard adpdu.messageType == .entityDiscover || _controllers[adpdu.entityID] == nil
+      guard adpdu.messageType == .entityDiscover || _controllers[adpdu.entityID]?.controller == nil
       else { return }
       for controller in _liveControllers {
         await controller._handle(adpdu, from: packet.sourceMacAddress)

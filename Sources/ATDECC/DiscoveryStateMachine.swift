@@ -29,6 +29,12 @@ enum DiscoveryEvent: Sendable {
 /// interface's valid time (twice `valid_time` seconds). An advertisement that changes a field
 /// which must not change while an entity stays online, or whose available_index does not
 /// increase, is treated as a new entity: it goes offline and comes back online.
+///
+/// Where the specification is silent or differs, this follows la_avdecc: an unchanged
+/// available_index also means a new entity; each interface times out separately, where
+/// Figure 6-4 has one timeout per entity; an ENTITY_AVAILABLE with ENTITY_NOT_READY is ignored,
+/// so a discovered entity that becomes not ready times out rather than going offline at once;
+/// and entities with GENERAL_CONTROLLER_IGNORE are discovered like any other.
 struct DiscoveryStateMachine: Sendable {
   private struct DiscoveredEntity: Sendable {
     var entity: Entity

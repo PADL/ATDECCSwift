@@ -97,7 +97,7 @@ public enum AemCommandPayload: Sendable, Hashable {
   case getControl(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
   case startStreaming(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
   case stopStreaming(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
-  case registerUnsolicitedNotification
+  case registerUnsolicitedNotification(flags: RegisterUnsolicitedNotificationFlags)
   case deregisterUnsolicitedNotification
   case getAvbInfo(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
   case getAsPath(descriptorIndex: DescriptorIndex)
@@ -207,8 +207,10 @@ public enum AemCommandPayload: Sendable, Hashable {
       try context.serialize(descriptorType)
       context.serialize(uint16: descriptorIndex)
     case .entityAvailable, .controllerAvailable, .getConfiguration, .getAssociationID,
-         .registerUnsolicitedNotification, .deregisterUnsolicitedNotification:
+         .deregisterUnsolicitedNotification:
       break
+    case let .registerUnsolicitedNotification(flags):
+      context.serialize(uint32: flags.rawValue)
     case let .readDescriptor(configurationIndex, descriptorType, descriptorIndex):
       context.serialize(uint16: configurationIndex)
       context.serialize(uint16: 0) // reserved
@@ -410,7 +412,11 @@ public enum AemCommandPayload: Sendable, Hashable {
         let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
         return .stopStreaming(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
       case .registerUnsolicitedNotification:
-        return .registerUnsolicitedNotification
+        // a command without flags is from an entity predating IEEE 1722.1-2021 (§7.4.37.1)
+        guard !input.isEmpty else { return .registerUnsolicitedNotification(flags: []) }
+        return try .registerUnsolicitedNotification(
+          flags: RegisterUnsolicitedNotificationFlags(rawValue: UInt32(parsingBigEndian: &input))
+        )
       case .deregisterUnsolicitedNotification:
         return .deregisterUnsolicitedNotification
       case .getAvbInfo:
@@ -791,6 +797,7 @@ public enum AemResponsePayload: Sendable, Hashable {
       case .getAsPath:
         let descriptorIndex = try UInt16(parsingBigEndian: &input)
         let count = try UInt16(parsingBigEndian: &input)
+        try input.requireRemaining(count, of: MemoryLayout<UInt64>.size)
         let sequence = try (0..<count).map { _ in try UniqueIdentifier(parsing: &input) }
         return .getAsPath(descriptorIndex: descriptorIndex, asPath: AsPath(sequence: sequence))
       case .getCounters:
@@ -814,6 +821,7 @@ public enum AemResponsePayload: Sendable, Hashable {
         let numberOfMaps = try UInt16(parsingBigEndian: &input)
         let numberOfMappings = try UInt16(parsingBigEndian: &input)
         _ = try UInt16(parsingBigEndian: &input) // reserved
+        try input.requireRemaining(numberOfMappings, of: AudioMapping.length)
         let mappings = try (0..<numberOfMappings).map { _ in try AudioMapping(parsing: &input) }
         return .getAudioMap(
           descriptorType: descriptorType,
@@ -904,6 +912,7 @@ private func _parseAudioMappings(
   let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
   let numberOfMappings = try UInt16(parsingBigEndian: &input)
   _ = try UInt16(parsingBigEndian: &input) // reserved
+  try input.requireRemaining(numberOfMappings, of: AudioMapping.length)
   let mappings = try (0..<numberOfMappings).map { _ in try AudioMapping(parsing: &input) }
   return (descriptorType, descriptorIndex, mappings)
 }
@@ -959,8 +968,8 @@ extension StreamInfo {
     msrpFailureBridgeID = try UInt64(parsingBigEndian: &input)
     streamVlanID = try UInt16(parsingBigEndian: &input)
     streamInfoFlagsEx = nil
-    probingStatus = nil
-    acmpStatus = nil
+    probingStatusRaw = nil
+    acmpStatusRaw = nil
 
     if payloadLength >= _ieee2021StreamInfoLength {
       // ip_flags, source_port, destination_port, source_ip_address, destination_ip_address
@@ -968,9 +977,9 @@ extension StreamInfo {
     } else if payloadLength >= _milanStreamInfoLength {
       _ = try UInt16(parsingBigEndian: &input) // reserved
       streamInfoFlagsEx = try StreamInfoFlagsEx(rawValue: UInt32(parsingBigEndian: &input))
-      let probingAcmpStatus = try UInt8(parsing: &input)
-      probingStatus = ProbingStatus(probingAcmpStatus >> 5)
-      acmpStatus = AcmpStatus(UInt16(probingAcmpStatus & 0x1F))
+      let probingAcmpStatus = try ProbingAcmpStatus(UInt8(parsing: &input))
+      probingStatusRaw = probingAcmpStatus.probingStatusRaw
+      acmpStatusRaw = probingAcmpStatus.acmpStatusRaw
       _ = try UInt8(parsing: &input) // reserved
       _ = try UInt16(parsingBigEndian: &input) // reserved
     } else {
@@ -994,6 +1003,11 @@ extension StreamInfo {
   }
 }
 
+extension MsrpMapping {
+  // traffic_class, priority, vlan_id
+  static let length = 4
+}
+
 extension AvbInfo {
   /// Parses the GET_AVB_INFO response fields following descriptor_type and descriptor_index
   /// (IEEE 1722.1-2021 §7.4.40.2).
@@ -1003,6 +1017,7 @@ extension AvbInfo {
     gptpDomainNumber = try UInt8(parsing: &input)
     flags = try AvbInfoFlags(rawValue: UInt8(parsing: &input))
     let msrpMappingsCount = try UInt16(parsingBigEndian: &input)
+    try input.requireRemaining(msrpMappingsCount, of: MsrpMapping.length)
     mappings = try (0..<msrpMappingsCount).map { _ in
       try MsrpMapping(
         trafficClass: UInt8(parsing: &input),
