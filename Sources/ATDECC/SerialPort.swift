@@ -213,27 +213,27 @@ private func _write(_ frame: [UInt8], to fileHandle: FileHandle, ring: IORing) a
   }
 }
 
+// the termios speed constants import as Int32 on x86_64 but as UInt32 on aarch64
 private func _speed(baudRate: Int) throws -> speed_t {
-  let speed: Int32 = switch baudRate {
-  case 9600: B9600
-  case 19200: B19200
-  case 38400: B38400
-  case 57600: B57600
-  case 115_200: B115200
-  case 230_400: B230400
-  case 460_800: B460800
-  case 500_000: B500000
-  case 576_000: B576000
-  case 921_600: B921600
-  case 1_000_000: B1000000
-  case 1_152_000: B1152000
-  case 1_500_000: B1500000
-  case 2_000_000: B2000000
-  case 3_000_000: B3000000
-  case 4_000_000: B4000000
+  switch baudRate {
+  case 9600: speed_t(B9600)
+  case 19200: speed_t(B19200)
+  case 38400: speed_t(B38400)
+  case 57600: speed_t(B57600)
+  case 115_200: speed_t(B115200)
+  case 230_400: speed_t(B230400)
+  case 460_800: speed_t(B460800)
+  case 500_000: speed_t(B500000)
+  case 576_000: speed_t(B576000)
+  case 921_600: speed_t(B921600)
+  case 1_000_000: speed_t(B1000000)
+  case 1_152_000: speed_t(B1152000)
+  case 1_500_000: speed_t(B1500000)
+  case 2_000_000: speed_t(B2000000)
+  case 3_000_000: speed_t(B3000000)
+  case 4_000_000: speed_t(B4000000)
   default: throw Errno(rawValue: EINVAL)
   }
-  return speed_t(speed)
 }
 
 #endif

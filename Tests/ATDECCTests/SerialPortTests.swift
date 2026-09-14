@@ -292,6 +292,27 @@ final class SerialPortTests: XCTestCase {
     XCTAssertNotEqual(flags & O_NONBLOCK, 0)
   }
 
+  // the termios speed constants are Int32 on x86_64 but UInt32 on aarch64
+  func testOpenSetsBaudRate() throws {
+    let device = open(devicePath, O_RDWR | O_NOCTTY | O_CLOEXEC)
+    guard device >= 0 else { throw XCTSkip("cannot open \(devicePath!)") }
+    defer { close(device) }
+    let speeds: [(baudRate: Int, speed: speed_t)] = [
+      (9600, speed_t(B9600)),
+      (115_200, speed_t(B115200)),
+      (921_600, speed_t(B921600)),
+      (4_000_000, speed_t(B4000000)),
+    ]
+    for (baudRate, speed) in speeds {
+      let port = try SerialPort(path: devicePath, baudRate: baudRate)
+      var tty = termios()
+      XCTAssertEqual(tcgetattr(device, &tty), 0)
+      XCTAssertEqual(cfgetospeed(&tty), speed, "baud rate \(baudRate)")
+      port.close()
+    }
+    XCTAssertThrowsError(try SerialPort(path: devicePath, baudRate: 12345))
+  }
+
   func testStalledSendDoesNotBlockTheRing() async throws {
     let port = try SerialPort(path: devicePath)
     defer { port.close() }
