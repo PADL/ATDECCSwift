@@ -16,6 +16,7 @@
 
 @testable import ATDECC
 import IEEE802
+import Synchronization
 import XCTest
 #if os(Linux)
 import Glibc
@@ -107,6 +108,53 @@ final class CobsTests: XCTestCase {
 private let TIOCGPTN: UInt = 0x8004_5430
 private let TIOCSPTLCK: UInt = 0x4004_5431
 
+/// A new pseudo-terminal: its controller end, and the path of its device end.
+private func openPseudoTerminal() throws -> (controller: FileHandle, devicePath: String) {
+  let fileDescriptor = open("/dev/ptmx", O_RDWR | O_NOCTTY | O_CLOEXEC)
+  guard fileDescriptor >= 0 else { throw XCTSkip("pseudo-terminals are unavailable") }
+  let controller = try FileHandle(fileDescriptor: fileDescriptor, closeOnDealloc: true)
+  var unlock: CInt = 0
+  var terminalNumber: CInt = 0
+  guard ioctl(fileDescriptor, TIOCSPTLCK, &unlock) == 0,
+        ioctl(fileDescriptor, TIOCGPTN, &terminalNumber) == 0
+  else {
+    throw XCTSkip("pseudo-terminals are unavailable")
+  }
+  return (controller, "/dev/pts/\(terminalNumber)")
+}
+
+/// Whether a task has completed, polled so that waiting does not depend on the task, or the
+/// ring it may be waiting on, making progress.
+private final class Completion<Success: Sendable>: Sendable {
+  private let _result = Mutex<Result<Success, any Error>?>(nil)
+
+  init(of task: Task<Success, any Error>) {
+    Task {
+      let result = await task.result
+      self._result.withLock { $0 = result }
+    }
+  }
+
+  /// The task's result, or nil if it does not complete within `timeout`.
+  func result(within timeout: Duration) async -> Result<Success, any Error>? {
+    let deadline = ContinuousClock.now + timeout
+    repeat {
+      if let result = _result.withLock({ $0 }) {
+        return result
+      }
+      try? await Task.sleep(for: .milliseconds(5))
+    } while ContinuousClock.now < deadline
+    return nil
+  }
+}
+
+// A send taking this long has stalled: an unblocked write to a terminal takes microseconds.
+private let stalledSendTimeout = Duration.milliseconds(250)
+// Far more frames than a terminal's buffers hold.
+private let maximumFramesToStall = 1000
+// Large enough that a few dozen frames fill a terminal's buffers.
+private let largeCommandSpecificDataLength = 1400
+
 final class SerialPortTests: XCTestCase {
   // An ENTITY_DISCOVER for all entities (entity_id 0, §6.2.6.3), as serialized by the codec.
   private var entityDiscover: [UInt8] {
@@ -120,17 +168,46 @@ final class SerialPortTests: XCTestCase {
   private var devicePath: String!
 
   override func setUpWithError() throws {
-    let fileDescriptor = open("/dev/ptmx", O_RDWR | O_NOCTTY | O_CLOEXEC)
-    guard fileDescriptor >= 0 else { throw XCTSkip("pseudo-terminals are unavailable") }
-    controller = try FileHandle(fileDescriptor: fileDescriptor, closeOnDealloc: true)
-    var unlock: CInt = 0
-    var terminalNumber: CInt = 0
-    guard ioctl(fileDescriptor, TIOCSPTLCK, &unlock) == 0,
-          ioctl(fileDescriptor, TIOCGPTN, &terminalNumber) == 0
-    else {
-      throw XCTSkip("pseudo-terminals are unavailable")
+    (controller, devicePath) = try openPseudoTerminal()
+  }
+
+  /// Sends frames, which the controller end never reads, until a send does not complete
+  /// because the terminal's buffers are full, and returns that send.
+  private func fillUntilSendStalls(_ port: SerialPort) async throws -> Task<(), any Error> {
+    let pdu = try AvdeccPdu.aecp(.aem(AemAecpdu(
+      isResponse: false,
+      targetEntityID: UniqueIdentifier(0),
+      controllerEntityID: UniqueIdentifier(0),
+      commandType: .readDescriptor,
+      commandSpecificData: [UInt8](repeating: 0x55, count: largeCommandSpecificDataLength)
+    ))).serialized()
+    let packet = IEEE802Packet(
+      destMacAddress: AvdeccMulticastMacAddress,
+      tci: nil,
+      sourceMacAddress: port.macAddress,
+      etherType: AvtpEtherType,
+      payload: pdu
+    )
+    for _ in 0..<maximumFramesToStall {
+      let send = Task { try await port.send(packet) }
+      guard await Completion(of: send).result(within: stalledSendTimeout) != nil else {
+        return send
+      }
     }
-    devicePath = "/dev/pts/\(terminalNumber)"
+    throw XCTSkip("sends to the pseudo-terminal never stalled")
+  }
+
+  /// Reads whatever the controller end holds, without the ring, so that a write stalled on it
+  /// can finish even if the ring's thread is blocked in it.
+  private func drainController(until send: Task<(), any Error>) async {
+    let fileDescriptor = controller.fileDescriptor
+    _ = fcntl(fileDescriptor, F_SETFL, fcntl(fileDescriptor, F_GETFL) | O_NONBLOCK)
+    let completion = Completion(of: send)
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    let deadline = ContinuousClock.now + .seconds(2)
+    repeat {
+      while read(fileDescriptor, &buffer, buffer.count) > 0 {}
+    } while await completion.result(within: .milliseconds(10)) == nil && ContinuousClock.now < deadline
   }
 
   func testSendEncodesAvtpduWithoutPadding() async throws {
@@ -187,6 +264,72 @@ final class SerialPortTests: XCTestCase {
       _macAddressToString(packet.destMacAddress),
       _macAddressToString(AvdeccMulticastMacAddress)
     )
+  }
+
+  func testOpenClearsHardwareFlowControl() throws {
+    // termios outlives an open of the device: this one is held open, and leaves CRTSCTS set
+    let device = open(devicePath, O_RDWR | O_NOCTTY | O_CLOEXEC)
+    guard device >= 0 else { throw XCTSkip("cannot open \(devicePath!)") }
+    defer { close(device) }
+    var tty = termios()
+    XCTAssertEqual(tcgetattr(device, &tty), 0)
+    tty.c_cflag |= tcflag_t(CRTSCTS)
+    XCTAssertEqual(tcsetattr(device, TCSANOW, &tty), 0)
+    XCTAssertEqual(tcgetattr(device, &tty), 0)
+    XCTAssertNotEqual(tty.c_cflag & tcflag_t(CRTSCTS), 0, "the pseudo-terminal does not hold CRTSCTS")
+
+    let port = try SerialPort(path: devicePath)
+    defer { port.close() }
+    XCTAssertEqual(tcgetattr(device, &tty), 0)
+    XCTAssertEqual(tty.c_cflag & tcflag_t(CRTSCTS), 0)
+  }
+
+  func testOpenIsNonBlocking() throws {
+    let port = try SerialPort(path: devicePath)
+    defer { port.close() }
+    let flags = fcntl(port._fileHandle.fileDescriptor, F_GETFL)
+    XCTAssertGreaterThanOrEqual(flags, 0)
+    XCTAssertNotEqual(flags & O_NONBLOCK, 0)
+  }
+
+  func testStalledSendDoesNotBlockTheRing() async throws {
+    let port = try SerialPort(path: devicePath)
+    defer { port.close() }
+    let stalledSend = try await fillUntilSendStalls(port)
+
+    // another request on the shared ring: a read of a second pseudo-terminal's controller end
+    let (otherController, otherDevicePath) = try openPseudoTerminal()
+    let otherDevice = open(otherDevicePath, O_RDWR | O_NOCTTY | O_CLOEXEC)
+    guard otherDevice >= 0 else { throw XCTSkip("cannot open \(otherDevicePath)") }
+    defer { close(otherDevice) }
+    let bytes: [UInt8] = [0x41, 0x42, 0x43]
+    XCTAssertEqual(write(otherDevice, bytes, bytes.count), bytes.count)
+    let read = Task {
+      try await IORing.shared.read(count: bytes.count, from: otherController)
+    }
+    let readResult = await Completion(of: read).result(within: .seconds(1))
+
+    stalledSend.cancel()
+    await drainController(until: stalledSend)
+    switch readResult {
+    case let .success(received): XCTAssertEqual(received, bytes)
+    case let .failure(error): XCTFail("read failed: \(error)")
+    case .none: XCTFail("a stalled send blocked another request on the ring")
+    }
+  }
+
+  func testStalledSendCanBeCancelled() async throws {
+    let port = try SerialPort(path: devicePath)
+    defer { port.close() }
+    let stalledSend = try await fillUntilSendStalls(port)
+    stalledSend.cancel()
+    let result = await Completion(of: stalledSend).result(within: .seconds(1))
+    // lets a write that was not cancelled finish, rather than leave it stalled
+    await drainController(until: stalledSend)
+    switch result {
+    case .failure(is CancellationError): break
+    case let result: XCTFail("expected CancellationError, got \(String(describing: result))")
+    }
   }
 }
 
