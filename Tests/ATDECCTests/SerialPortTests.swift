@@ -108,10 +108,10 @@ private let TIOCGPTN: UInt = 0x8004_5430
 private let TIOCSPTLCK: UInt = 0x4004_5431
 
 final class SerialPortTests: XCTestCase {
-  // An ENTITY_DISCOVER for all entities, as serialized by the codec.
+  // An ENTITY_DISCOVER for all entities (entity_id 0, §6.2.6.3), as serialized by the codec.
   private var entityDiscover: [UInt8] {
     get throws {
-      try AvdeccPdu.adp(Adpdu(messageType: .entityDiscover, entityID: UniqueIdentifier.null))
+      try AvdeccPdu.adp(Adpdu(messageType: .entityDiscover, entityID: UniqueIdentifier(0)))
         .serialized()
     }
   }
