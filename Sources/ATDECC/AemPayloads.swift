@@ -797,6 +797,7 @@ public enum AemResponsePayload: Sendable, Hashable {
       case .getAsPath:
         let descriptorIndex = try UInt16(parsingBigEndian: &input)
         let count = try UInt16(parsingBigEndian: &input)
+        try input.requireRemaining(count, of: MemoryLayout<UInt64>.size)
         let sequence = try (0..<count).map { _ in try UniqueIdentifier(parsing: &input) }
         return .getAsPath(descriptorIndex: descriptorIndex, asPath: AsPath(sequence: sequence))
       case .getCounters:
@@ -820,6 +821,7 @@ public enum AemResponsePayload: Sendable, Hashable {
         let numberOfMaps = try UInt16(parsingBigEndian: &input)
         let numberOfMappings = try UInt16(parsingBigEndian: &input)
         _ = try UInt16(parsingBigEndian: &input) // reserved
+        try input.requireRemaining(numberOfMappings, of: AudioMapping.length)
         let mappings = try (0..<numberOfMappings).map { _ in try AudioMapping(parsing: &input) }
         return .getAudioMap(
           descriptorType: descriptorType,
@@ -910,6 +912,7 @@ private func _parseAudioMappings(
   let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
   let numberOfMappings = try UInt16(parsingBigEndian: &input)
   _ = try UInt16(parsingBigEndian: &input) // reserved
+  try input.requireRemaining(numberOfMappings, of: AudioMapping.length)
   let mappings = try (0..<numberOfMappings).map { _ in try AudioMapping(parsing: &input) }
   return (descriptorType, descriptorIndex, mappings)
 }
@@ -1000,6 +1003,11 @@ extension StreamInfo {
   }
 }
 
+extension MsrpMapping {
+  // traffic_class, priority, vlan_id
+  static let length = 4
+}
+
 extension AvbInfo {
   /// Parses the GET_AVB_INFO response fields following descriptor_type and descriptor_index
   /// (IEEE 1722.1-2021 §7.4.40.2).
@@ -1009,6 +1017,7 @@ extension AvbInfo {
     gptpDomainNumber = try UInt8(parsing: &input)
     flags = try AvbInfoFlags(rawValue: UInt8(parsing: &input))
     let msrpMappingsCount = try UInt16(parsingBigEndian: &input)
+    try input.requireRemaining(msrpMappingsCount, of: MsrpMapping.length)
     mappings = try (0..<msrpMappingsCount).map { _ in
       try MsrpMapping(
         trafficClass: UInt8(parsing: &input),

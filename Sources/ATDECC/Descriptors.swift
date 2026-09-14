@@ -189,6 +189,8 @@ public struct ConfigurationDescriptor: Sendable, Hashable, CustomStringConvertib
     let descriptorCountsCount = try UInt16(parsingBigEndian: &input)
     let descriptorCountsOffset = try UInt16(parsingBigEndian: &input)
     var counts = try input.seeking(toAbsoluteOffset: input.descriptorOffset(descriptorCountsOffset))
+    // descriptor_type, count
+    try counts.requireRemaining(descriptorCountsCount, of: 2 * MemoryLayout<UInt16>.size)
     descriptorCounts = [:]
     for _ in 0..<descriptorCountsCount {
       let descriptorType = try DescriptorType(parsing: &counts)
@@ -321,6 +323,7 @@ public struct AudioUnitDescriptor: Sendable, Hashable, CustomStringConvertible {
     let samplingRatesOffset = try UInt16(parsingBigEndian: &input)
     let numberOfSamplingRates = try UInt16(parsingBigEndian: &input)
     var rates = try input.seeking(toAbsoluteOffset: input.descriptorOffset(samplingRatesOffset))
+    try rates.requireRemaining(numberOfSamplingRates, of: MemoryLayout<UInt32>.size)
     samplingRates = try (0..<numberOfSamplingRates).map { _ in
       try SamplingRate(parsing: &rates)
     }
@@ -421,6 +424,7 @@ public struct StreamDescriptor: Sendable, Hashable, CustomStringConvertible {
       let redundantOffset = try UInt16(parsingBigEndian: &input)
       let numberOfRedundantStreams = try UInt16(parsingBigEndian: &input)
       var redundant = try input.seeking(toAbsoluteOffset: input.descriptorOffset(redundantOffset))
+      try redundant.requireRemaining(numberOfRedundantStreams, of: MemoryLayout<UInt16>.size)
       redundantStreams = try (0..<numberOfRedundantStreams).map { _ in
         try UInt16(parsingBigEndian: &redundant)
       }
@@ -429,6 +433,7 @@ public struct StreamDescriptor: Sendable, Hashable, CustomStringConvertible {
     }
 
     var formatsSpan = try input.seeking(toAbsoluteOffset: input.descriptorOffset(formatsOffset))
+    try formatsSpan.requireRemaining(numberOfFormats, of: MemoryLayout<UInt64>.size)
     formats = try (0..<numberOfFormats).map { _ in
       try StreamFormat(parsing: &formatsSpan)
     }
@@ -908,6 +913,7 @@ public struct AudioMapDescriptor: Sendable, Hashable, CustomStringConvertible {
     let mappingsOffset = try UInt16(parsingBigEndian: &input)
     let numberOfMappings = try UInt16(parsingBigEndian: &input)
     var mappingsSpan = try input.seeking(toAbsoluteOffset: input.descriptorOffset(mappingsOffset))
+    try mappingsSpan.requireRemaining(numberOfMappings, of: AudioMapping.length)
     mappings = try (0..<numberOfMappings).map { _ in
       try AudioMapping(parsing: &mappingsSpan)
     }
@@ -1004,6 +1010,7 @@ public struct ClockDomainDescriptor: Sendable, Hashable, CustomStringConvertible
     let clockSourcesOffset = try UInt16(parsingBigEndian: &input)
     let numberOfClockSources = try UInt16(parsingBigEndian: &input)
     var sources = try input.seeking(toAbsoluteOffset: input.descriptorOffset(clockSourcesOffset))
+    try sources.requireRemaining(numberOfClockSources, of: MemoryLayout<UInt16>.size)
     clockSources = try (0..<numberOfClockSources).map { _ in
       try UInt16(parsingBigEndian: &sources)
     }
@@ -1044,6 +1051,7 @@ public struct TimingDescriptor: Sendable, Hashable, CustomStringConvertible {
     let ptpInstancesOffset = try UInt16(parsingBigEndian: &input)
     let numberOfPtpInstances = try UInt16(parsingBigEndian: &input)
     var instances = try input.seeking(toAbsoluteOffset: input.descriptorOffset(ptpInstancesOffset))
+    try instances.requireRemaining(numberOfPtpInstances, of: MemoryLayout<UInt16>.size)
     ptpInstances = try (0..<numberOfPtpInstances).map { _ in
       try UInt16(parsingBigEndian: &instances)
     }

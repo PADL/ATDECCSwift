@@ -324,6 +324,12 @@ extension ParserSpan {
       throw AvdeccCodecError.payloadTooShort(expected: count, actual: self.count)
     }
   }
+
+  /// Throws unless `count` elements of `elementLength` bytes remain, so that a count read from
+  /// the wire is checked before storage is reserved for that many elements.
+  func requireRemaining(_ count: some BinaryInteger, of elementLength: Int) throws {
+    try requireRemaining(Int(count) * elementLength)
+  }
 }
 
 func _parseMacAddress(_ input: inout ParserSpan) throws -> [UInt8] {

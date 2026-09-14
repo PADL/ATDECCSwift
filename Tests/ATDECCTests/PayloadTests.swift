@@ -229,6 +229,31 @@ final class PayloadTests: XCTestCase {
     ])
   }
 
+  func testTruncatedGetAudioMapResponseRejected() {
+    let data: [UInt8] = [
+      0x00, 0x0E, 0x00, 0x00, // STREAM_PORT_INPUT 0
+      0x00, 0x00, 0x00, 0x01, // map_index 0, number_of_maps 1
+      0xFF, 0xFF, 0x00, 0x00, // number_of_mappings 65535, reserved
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // the only mapping present
+    ]
+    XCTAssertThrowsError(
+      try AemResponsePayload(commandTypeRaw: AemCommandType.getAudioMap.rawValue, data: data)
+    ) { error in
+      XCTAssertEqual(error as? AvdeccCodecError, .payloadTooShort(expected: 0xFFFF * 8, actual: 8))
+    }
+  }
+
+  func testTruncatedAudioMapDescriptorRejected() {
+    let bytes: [UInt8] = [
+      0x00, 0x17, 0x00, 0x00, // AUDIO_MAP 0
+      0x00, 0x08, 0xFF, 0xFF, // mappings_offset 8, number_of_mappings 65535
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // the only mapping present
+    ]
+    XCTAssertThrowsError(try readDescriptorResponse(bytes)) { error in
+      XCTAssertEqual(error as? AvdeccCodecError, .payloadTooShort(expected: 0xFFFF * 8, actual: 8))
+    }
+  }
+
   func testGetCountersResponse() throws {
     var data = be16(DescriptorType.avbInterface.rawValue) + be16(0)
     data += [0x00, 0x00, 0x00, 0x01] // counters_valid: LINK_UP (bit 31, MSB-first)
