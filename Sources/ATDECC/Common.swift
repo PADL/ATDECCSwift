@@ -290,19 +290,32 @@ func _macAddressString(_ bytes: [UInt8]) -> String {
 }
 
 extension String {
-  /// Parses a NUL-padded 64-octet UTF-8 string (IEEE 1722.1-2021 §7.3.5).
+  /// Parses a NUL-padded 64-octet UTF-8 string (IEEE 1722.1-2021 §7.3.5), which is not
+  /// NUL-terminated when it fills the field. Invalid UTF-8 is repaired.
   init(parsingAvdeccFixedString input: inout ParserSpan) throws {
-    let bytes = try [UInt8](parsing: &input, byteCount: AvdeccFixedStringLength)
-    let end = bytes.firstIndex(of: 0) ?? bytes.endIndex
-    self = String(decoding: bytes[..<end], as: UTF8.self)
+    let field = try input.sliceSpan(byteCount: AvdeccFixedStringLength)
+    self = field.withUnsafeBytes { bytes in
+      let end = bytes.firstIndex(of: 0) ?? bytes.endIndex
+      return String(decoding: bytes[..<end], as: UTF8.self)
+    }
   }
 }
 
 extension SerializationContext {
-  /// Serializes `string` as a NUL-padded 64-octet UTF-8 string, truncating longer strings.
+  /// Serializes `string` as a NUL-padded 64-octet UTF-8 string. A longer string is truncated
+  /// after the last whole character that fits, so that it remains valid UTF-8.
   mutating func serialize(avdeccFixedString string: String) {
-    var bytes = Array(string.utf8.prefix(AvdeccFixedStringLength))
-    bytes += [UInt8](repeating: 0, count: AvdeccFixedStringLength - bytes.count)
+    var length = string.utf8.count
+    if length > AvdeccFixedStringLength {
+      length = 0
+      for character in string {
+        let characterLength = character.utf8.count
+        guard length + characterLength <= AvdeccFixedStringLength else { break }
+        length += characterLength
+      }
+    }
+    var bytes = [UInt8](repeating: 0, count: AvdeccFixedStringLength)
+    bytes.replaceSubrange(0..<length, with: string.utf8.prefix(length))
     serialize(bytes)
   }
 

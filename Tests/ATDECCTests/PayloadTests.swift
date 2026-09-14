@@ -473,4 +473,63 @@ extension PayloadTests {
     else { return XCTFail("not REGISTER_UNSOLICITED_NOTIFICATION") }
     XCTAssertEqual(noFlags, [])
   }
+
+  func testFixedStringTruncatesAtCharacterBoundary() throws {
+    let setName = AemCommandType.setName.rawValue
+    // descriptor_type, descriptor_index, name_index, configuration_index precede the name
+    let nameOffset = 8
+    func serializedName(_ name: String) throws -> [UInt8] {
+      let command = AemCommandPayload.setName(
+        descriptorType: .entity,
+        descriptorIndex: 0,
+        nameIndex: 0,
+        configurationIndex: 0,
+        name: name
+      )
+      return Array(try command.serialized()[nameOffset..<(nameOffset + AvdeccFixedStringLength)])
+    }
+
+    let sixtyThree = [UInt8](repeating: 0x61, count: 63) // "a" × 63
+    let sixtyTwo = [UInt8](repeating: 0x61, count: 62)
+    // U+00E9 (C3 A9) straddles the end of the field
+    XCTAssertEqual(try serializedName(String(repeating: "a", count: 63) + "\u{E9}"), sixtyThree + [0x00])
+    // U+1F44D (F0 9F 91 8D) straddles the end of the field
+    XCTAssertEqual(
+      try serializedName(String(repeating: "a", count: 62) + "\u{1F44D}"),
+      sixtyTwo + [0x00, 0x00]
+    )
+    // "e" and U+0301 (CC 81) are one character, which does not fit, so neither is kept
+    XCTAssertEqual(
+      try serializedName(String(repeating: "a", count: 62) + "e\u{301}"),
+      sixtyTwo + [0x00, 0x00]
+    )
+    // a string that fills the field exactly is kept whole, without a NUL
+    let sixtyFour = [UInt8](repeating: 0x61, count: 62) + [0xC3, 0xA9]
+    XCTAssertEqual(try serializedName(String(repeating: "a", count: 62) + "\u{E9}"), sixtyFour)
+
+    // and parsed whole, the field ending at 64 octets
+    let data = [0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03] + sixtyFour
+    guard case let .setName(_, descriptorIndex, nameIndex, configurationIndex, name) =
+      try AemCommandPayload(commandTypeRaw: setName, data: data)
+    else { return XCTFail("not SET_NAME") }
+    XCTAssertEqual([descriptorIndex, nameIndex, configurationIndex], [1, 2, 3])
+    XCTAssertEqual(name, String(repeating: "a", count: 62) + "\u{E9}")
+  }
+
+  func testFixedStringParsingIgnoresOctetsAfterNul() throws {
+    // SET_NAME command: the name ends the payload, so a mis-sized field would fail to parse
+    var field = Array("Input 1".utf8) + [0x00] + [0x42, 0x43]
+    field += [UInt8](repeating: 0x00, count: AvdeccFixedStringLength - field.count)
+    let data = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00] + field
+    guard case let .setName(_, _, _, _, name) =
+      try AemCommandPayload(commandTypeRaw: AemCommandType.setName.rawValue, data: data)
+    else { return XCTFail("not SET_NAME") }
+    XCTAssertEqual(name, "Input 1")
+
+    // too short a field is rejected
+    XCTAssertThrowsError(try AemCommandPayload(
+      commandTypeRaw: AemCommandType.setName.rawValue,
+      data: Array(data.dropLast())
+    ))
+  }
 }
