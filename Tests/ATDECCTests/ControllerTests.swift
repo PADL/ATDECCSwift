@@ -353,7 +353,7 @@ final class ControllerTests: XCTestCase {
   func testDiscovery() async throws {
     let controller = try await makeController()
     let entity = await controller.discoveredEntity(id: entityID)
-    XCTAssertEqual(entity?.macAddress, [0x02, 0x00, 0x00, 0x00, 0x00, 0x02])
+    XCTAssertEqual(entity?.macAddress.map { UInt64(eui48: $0) }, 0x0200_0000_0002)
     XCTAssertEqual(entity?.listenerStreamSinks, 1)
     XCTAssertEqual(entity?.interfaceInformationCount, 1)
     await controller.close()

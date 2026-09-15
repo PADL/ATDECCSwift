@@ -26,7 +26,7 @@ let package = Package(
     ),
   ],
   dependencies: [
-    .package(url: "https://github.com/PADL/IEEE802Swift", branch: "main"),
+    .package(url: "https://github.com/PADL/IEEE802Swift", from: "0.1.0"),
     .package(url: "https://github.com/PADL/IORingSwift", from: "2.0.0"),
     .package(url: "https://github.com/PADL/NetLinkSwift", branch: "main"),
     .package(url: "https://github.com/PADL/SocketAddress", from: "0.5.2"),

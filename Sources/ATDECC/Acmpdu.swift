@@ -59,7 +59,7 @@ public struct Acmpdu: Sendable, Hashable, CustomStringConvertible {
   public var listenerEntityID: UniqueIdentifier
   public var talkerUniqueID: UInt16
   public var listenerUniqueID: UInt16
-  public var streamDestAddress: [UInt8]
+  public var streamDestAddress: EUI48
   public var connectionCount: UInt16
   public var sequenceID: UInt16
   public var flags: ConnectionFlags
@@ -74,7 +74,7 @@ public struct Acmpdu: Sendable, Hashable, CustomStringConvertible {
     listenerEntityID: UniqueIdentifier = UniqueIdentifier(),
     talkerUniqueID: UInt16 = 0,
     listenerUniqueID: UInt16 = 0,
-    streamDestAddress: [UInt8] = [0, 0, 0, 0, 0, 0],
+    streamDestAddress: EUI48 = [0, 0, 0, 0, 0, 0],
     connectionCount: UInt16 = 0,
     sequenceID: UInt16 = 0,
     flags: ConnectionFlags = [],
@@ -108,8 +108,41 @@ public struct Acmpdu: Sendable, Hashable, CustomStringConvertible {
       ", controller: \(controllerEntityID)" +
       ", talker: \(talkerEntityID):\(talkerUniqueID)" +
       ", listener: \(listenerEntityID):\(listenerUniqueID)" +
-      ", destMac: \(_macAddressString(streamDestAddress)), count: \(connectionCount)" +
+      ", destMac: \(_macAddressToString(streamDestAddress)), count: \(connectionCount)" +
       ", flags: \(flags.rawValue), vlan: \(streamVlanID))"
+  }
+
+  // written out, as EUI48 (an InlineArray) is not Hashable
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.messageType == rhs.messageType &&
+      lhs.status == rhs.status &&
+      lhs.streamID == rhs.streamID &&
+      lhs.controllerEntityID == rhs.controllerEntityID &&
+      lhs.talkerEntityID == rhs.talkerEntityID &&
+      lhs.listenerEntityID == rhs.listenerEntityID &&
+      lhs.talkerUniqueID == rhs.talkerUniqueID &&
+      lhs.listenerUniqueID == rhs.listenerUniqueID &&
+      _isEqualMacAddress(lhs.streamDestAddress, rhs.streamDestAddress) &&
+      lhs.connectionCount == rhs.connectionCount &&
+      lhs.sequenceID == rhs.sequenceID &&
+      lhs.flags == rhs.flags &&
+      lhs.streamVlanID == rhs.streamVlanID
+  }
+
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(messageType)
+    hasher.combine(status)
+    hasher.combine(streamID)
+    hasher.combine(controllerEntityID)
+    hasher.combine(talkerEntityID)
+    hasher.combine(listenerEntityID)
+    hasher.combine(talkerUniqueID)
+    hasher.combine(listenerUniqueID)
+    _hashMacAddress(streamDestAddress, into: &hasher)
+    hasher.combine(connectionCount)
+    hasher.combine(sequenceID)
+    hasher.combine(flags)
+    hasher.combine(streamVlanID)
   }
 }
 
@@ -130,7 +163,7 @@ extension Acmpdu: SerDes {
     listenerEntityID = try UniqueIdentifier(parsing: &input)
     talkerUniqueID = try UInt16(parsingBigEndian: &input)
     listenerUniqueID = try UInt16(parsingBigEndian: &input)
-    streamDestAddress = try _parseMacAddress(&input)
+    streamDestAddress = try _eui48(parsing: &input)
     connectionCount = try UInt16(parsingBigEndian: &input)
     sequenceID = try UInt16(parsingBigEndian: &input)
     flags = try ConnectionFlags(rawValue: UInt16(parsingBigEndian: &input))
@@ -152,7 +185,7 @@ extension Acmpdu: SerDes {
     try serializationContext.serialize(listenerEntityID)
     serializationContext.serialize(uint16: talkerUniqueID)
     serializationContext.serialize(uint16: listenerUniqueID)
-    serializationContext.serialize(macAddress: streamDestAddress)
+    serializationContext.serialize(eui48: streamDestAddress)
     serializationContext.serialize(uint16: connectionCount)
     serializationContext.serialize(uint16: sequenceID)
     serializationContext.serialize(uint16: flags.rawValue)

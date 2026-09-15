@@ -133,8 +133,7 @@ public struct StreamInfo: Sendable, Hashable, CustomStringConvertible {
   public var msrpAccumulatedLatency: UInt32
   public var streamVlanID: UInt16
   public var streamInfoFlags: StreamInfoFlags
-  /// Six-byte stream destination MAC.
-  public var streamDestMac: [UInt8]
+  public var streamDestMac: EUI48
   /// MSRP failure code and bridge ID, valid when `msrpFailureValid` is set.
   public var msrpFailureCode: UInt8
   public var msrpFailureBridgeID: UInt64
@@ -162,7 +161,7 @@ public struct StreamInfo: Sendable, Hashable, CustomStringConvertible {
     msrpAccumulatedLatency: UInt32 = 0,
     streamVlanID: UInt16 = 0,
     streamInfoFlags: StreamInfoFlags = [],
-    streamDestMac: [UInt8] = [0, 0, 0, 0, 0, 0],
+    streamDestMac: EUI48 = [0, 0, 0, 0, 0, 0],
     msrpFailureCode: UInt8 = 0,
     msrpFailureBridgeID: UInt64 = 0,
     streamInfoFlagsEx: StreamInfoFlagsEx? = nil,
@@ -185,10 +184,39 @@ public struct StreamInfo: Sendable, Hashable, CustomStringConvertible {
   public var description: String {
     "StreamInfo(streamID: \(streamID)" +
       ", format: \(streamFormat)" +
-      ", destMac: \(_macAddressString(streamDestMac))" +
+      ", destMac: \(_macAddressToString(streamDestMac))" +
       ", vlan: \(streamVlanID)" +
       ", latency: \(msrpAccumulatedLatency) ns" +
       ", flags: \(streamInfoFlags.rawValue))"
+  }
+
+  // written out, as EUI48 (an InlineArray) is not Hashable
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.streamFormat == rhs.streamFormat &&
+      lhs.streamID == rhs.streamID &&
+      lhs.msrpAccumulatedLatency == rhs.msrpAccumulatedLatency &&
+      lhs.streamVlanID == rhs.streamVlanID &&
+      lhs.streamInfoFlags == rhs.streamInfoFlags &&
+      _isEqualMacAddress(lhs.streamDestMac, rhs.streamDestMac) &&
+      lhs.msrpFailureCode == rhs.msrpFailureCode &&
+      lhs.msrpFailureBridgeID == rhs.msrpFailureBridgeID &&
+      lhs.streamInfoFlagsEx == rhs.streamInfoFlagsEx &&
+      lhs.probingStatusRaw == rhs.probingStatusRaw &&
+      lhs.acmpStatusRaw == rhs.acmpStatusRaw
+  }
+
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(streamFormat)
+    hasher.combine(streamID)
+    hasher.combine(msrpAccumulatedLatency)
+    hasher.combine(streamVlanID)
+    hasher.combine(streamInfoFlags)
+    _hashMacAddress(streamDestMac, into: &hasher)
+    hasher.combine(msrpFailureCode)
+    hasher.combine(msrpFailureBridgeID)
+    hasher.combine(streamInfoFlagsEx)
+    hasher.combine(probingStatusRaw)
+    hasher.combine(acmpStatusRaw)
   }
 }
 
@@ -292,11 +320,34 @@ public struct AsPath: Sendable, Hashable, CustomStringConvertible {
 /// The 32 counters returned by GET_COUNTERS (IEEE 1722.1-2021 §7.4.42.2); the valid flags,
 /// typed per descriptor, say which are meaningful.
 public struct DescriptorCounters: Sendable, Hashable {
-  public static let count = 32
+  public typealias Counters = InlineArray<32, UInt32>
 
-  public let counters: [UInt32]
-  public init(_ counters: [UInt32]) { self.counters = counters }
+  public static let count = Counters.count
+
+  public let counters: Counters
+
+  public init(_ counters: Counters) {
+    self.counters = counters
+  }
+
+  /// Takes exactly `count` counters.
+  public init(_ counters: [UInt32]) {
+    precondition(counters.count == Self.count, "GET_COUNTERS returns \(Self.count) counters")
+    self.counters = Counters { counters[$0] }
+  }
+
   public subscript(index: Int) -> UInt32 { counters[index] }
+
+  // written out, as InlineArray is not Hashable
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.counters.indices.allSatisfy { lhs.counters[$0] == rhs.counters[$0] }
+  }
+
+  public func hash(into hasher: inout Hasher) {
+    for index in counters.indices {
+      hasher.combine(counters[index])
+    }
+  }
 }
 
 // MARK: - Clocks
@@ -444,7 +495,7 @@ public struct Entity: Sendable, Hashable, CustomStringConvertible {
   public static let globalAvbInterfaceIndex: UInt16 = 0xFFFF
 
   public struct InterfaceInformation: Sendable, Hashable {
-    public var macAddress: [UInt8]
+    public var macAddress: EUI48
     /// Validity of the advertisement, in units of 2 seconds.
     public var validTime: UInt8
     public var availableIndex: UInt32
@@ -452,7 +503,7 @@ public struct Entity: Sendable, Hashable, CustomStringConvertible {
     public var gptpDomainNumber: UInt8?
 
     public init(
-      macAddress: [UInt8],
+      macAddress: EUI48,
       validTime: UInt8,
       availableIndex: UInt32,
       gptpGrandmasterID: UniqueIdentifier? = nil,
@@ -463,6 +514,23 @@ public struct Entity: Sendable, Hashable, CustomStringConvertible {
       self.availableIndex = availableIndex
       self.gptpGrandmasterID = gptpGrandmasterID
       self.gptpDomainNumber = gptpDomainNumber
+    }
+
+    // written out, as EUI48 (an InlineArray) is not Hashable
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+      _isEqualMacAddress(lhs.macAddress, rhs.macAddress) &&
+        lhs.validTime == rhs.validTime &&
+        lhs.availableIndex == rhs.availableIndex &&
+        lhs.gptpGrandmasterID == rhs.gptpGrandmasterID &&
+        lhs.gptpDomainNumber == rhs.gptpDomainNumber
+    }
+
+    public func hash(into hasher: inout Hasher) {
+      _hashMacAddress(macAddress, into: &hasher)
+      hasher.combine(validTime)
+      hasher.combine(availableIndex)
+      hasher.combine(gptpGrandmasterID)
+      hasher.combine(gptpDomainNumber)
     }
   }
 
@@ -481,7 +549,7 @@ public struct Entity: Sendable, Hashable, CustomStringConvertible {
   /// Builds an entity with the single interface described by `adpdu`, received from
   /// `macAddress`. Optional fields are only populated when the matching capability says they
   /// are valid.
-  public init(adpdu: Adpdu, macAddress: [UInt8]) {
+  public init(adpdu: Adpdu, macAddress: EUI48) {
     let capabilities = adpdu.entityCapabilities
     entityID = adpdu.entityID
     entityModelID = adpdu.entityModelID
@@ -513,7 +581,7 @@ public struct Entity: Sendable, Hashable, CustomStringConvertible {
   }
 
   /// A MAC address through which the entity can be reached, preferring the lowest interface.
-  public var macAddress: [UInt8]? {
+  public var macAddress: EUI48? {
     interfacesInformation.min { $0.key < $1.key }?.value.macAddress
   }
 

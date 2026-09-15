@@ -142,16 +142,18 @@ public actor EndStation<Port: NetworkPort> {
   }
 
   nonisolated func send(_ pdu: AvdeccPdu, to destination: EUI48) async throws {
-    var payload = try pdu.serialized()
-    if payload.count < _ethernetMinimumPayloadLength {
-      payload += [UInt8](repeating: 0, count: _ethernetMinimumPayloadLength - payload.count)
+    var payload = SerializationContext()
+    payload.reserveCapacity(max(pdu.serializedLength, _ethernetMinimumPayloadLength))
+    try pdu.serialize(into: &payload)
+    if payload.position < _ethernetMinimumPayloadLength {
+      payload.serialize(repeating: 0, count: _ethernetMinimumPayloadLength - payload.position)
     }
     try await port.send(IEEE802Packet(
       destMacAddress: destination,
       tci: nil,
       sourceMacAddress: macAddress,
       etherType: AvtpEtherType,
-      payload: payload
+      payload: payload.bytes
     ))
   }
 
@@ -258,18 +260,5 @@ public actor EndStation<Port: NetworkPort> {
         await controller._handle(acmpdu)
       }
     }
-  }
-}
-
-// MARK: - MAC address helpers
-
-extension EUI48 {
-  var bytes: [UInt8] {
-    [self[0], self[1], self[2], self[3], self[4], self[5]]
-  }
-
-  init(bytes: [UInt8]) {
-    precondition(bytes.count == 6)
-    self = [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]]
   }
 }

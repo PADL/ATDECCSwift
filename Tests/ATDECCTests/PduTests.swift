@@ -161,6 +161,26 @@ final class PduTests: XCTestCase {
     XCTAssertEqual(Array(bytes[22..<28]), [0x00, 0x1B, 0xC5, 0x0A, 0xC1, 0x00])
     XCTAssertEqual(try parse(bytes), .aecp(.mvu(mvu)))
   }
+
+  func testOtherVendorUniqueAecpduKeepsProtocolIdentifier() throws {
+    // a VENDOR_UNIQUE_COMMAND for a protocol other than Milan's (IEEE 1722.1-2021 §9.2.1.3)
+    let bytes: [UInt8] = [
+      0xFB, 0x06, 0x00, 0x12, // subtype, message_type VENDOR_UNIQUE_COMMAND, cdl 18
+      0x00, 0x1B, 0x92, 0xFF, 0xFE, 0x01, 0x02, 0x03, // target_entity_id
+      0x02, 0x00, 0x00, 0xFF, 0xFE, 0x00, 0x00, 0x01, // controller_entity_id
+      0x00, 0x05, // sequence_id
+      0x00, 0x1B, 0x92, 0x00, 0x00, 0x01, // protocol_id
+      0xDE, 0xAD,
+    ]
+    let pdu = try parse(bytes)
+    guard case let .aecp(.other(messageType, _, _, _, sequenceID, specificData)) = pdu else {
+      return XCTFail("expected an undecoded AECPDU")
+    }
+    XCTAssertEqual(messageType, AecpMessageType.vendorUniqueCommand.rawValue)
+    XCTAssertEqual(sequenceID, 5)
+    XCTAssertEqual(specificData, [0x00, 0x1B, 0x92, 0x00, 0x00, 0x01, 0xDE, 0xAD])
+    XCTAssertEqual(try pdu.serialized(), bytes)
+  }
 }
 
 extension PduTests {

@@ -218,7 +218,7 @@ final class PayloadTests: XCTestCase {
     XCTAssertEqual(descriptorType, .streamInput)
     XCTAssertTrue(info.streamInfoFlags.contains(.connected))
     XCTAssertEqual(info.streamVlanID, 2)
-    XCTAssertEqual(info.streamDestMac, [0x91, 0xE0, 0xF0, 0x00, 0x12, 0x34])
+    XCTAssertEqual(UInt64(eui48: info.streamDestMac), 0x91E0_F000_1234)
     XCTAssertEqual(info.streamInfoFlagsEx, .registering)
     XCTAssertEqual(info.probingStatus, .completed)
     XCTAssertEqual(info.acmpStatus, .success)
@@ -531,5 +531,67 @@ extension PayloadTests {
       commandTypeRaw: AemCommandType.setName.rawValue,
       data: Array(data.dropLast())
     ))
+  }
+
+  func testAvbInterfaceDescriptorComparesEveryField() throws {
+    var body = fixedString("AVB 1") + be16(0xFFFF) + [0x00, 0x1B, 0x92, 0x00, 0x00, 0x01] // mac_address
+    body += be16(0x0007) + be64(0x001B_92FF_FE00_0001) // interface_flags, clock_identity
+    body += [0xF6, 0xF8] + be16(0x436A) // priority1, clock_class, offset_scaled_log_variance
+    // clock_accuracy, priority2, domain_number, log_sync_interval, log_announce_interval,
+    // log_pdelay_interval, port_number
+    body += [0x21, 0xF7, 0x00, 0xFD, 0x00, 0x00] + be16(1)
+    let bytes = be16(DescriptorType.avbInterface.rawValue) + be16(0) + body
+    guard case let (_, _, .avbInterface(descriptor)) = try readDescriptorResponse(bytes) else {
+      return XCTFail("expected AVB_INTERFACE")
+    }
+    XCTAssertEqual(UInt64(eui48: descriptor.macAddress), 0x001B_9200_0001)
+    var context = SerializationContext()
+    try Descriptor.avbInterface(descriptor).serialize(descriptorIndex: 0, into: &context)
+    XCTAssertEqual(context.bytes, bytes)
+
+    let mutations: [(String, (inout AvbInterfaceDescriptor) -> ())] = [
+      ("objectName", { $0.objectName = "" }),
+      ("localizedDescription", { $0.localizedDescription = LocalizedStringReference(rawValue: 0) }),
+      ("macAddress", { $0.macAddress[5] = 0 }),
+      ("interfaceFlags", { $0.interfaceFlags = [] }),
+      ("clockIdentity", { $0.clockIdentity = UniqueIdentifier(0) }),
+      ("priority1", { $0.priority1 = 0 }),
+      ("clockClass", { $0.clockClass = 0 }),
+      ("offsetScaledLogVariance", { $0.offsetScaledLogVariance = 0 }),
+      ("clockAccuracy", { $0.clockAccuracy = 0 }),
+      ("priority2", { $0.priority2 = 0 }),
+      ("domainNumber", { $0.domainNumber = 1 }),
+      ("logSyncInterval", { $0.logSyncInterval = 0 }),
+      ("logAnnounceInterval", { $0.logAnnounceInterval = 1 }),
+      ("logPDelayInterval", { $0.logPDelayInterval = 1 }),
+      ("portNumber", { $0.portNumber = 0 }),
+    ]
+    assertEveryFieldIsCompared(descriptor, mutations)
+  }
+
+  func testPtpPortDescriptorComparesEveryField() throws {
+    // object_name, localized_description, port_number, port_type, flags, avb_interface_index,
+    // profile_identifier
+    let body = fixedString("PTP 1") + be16(0xFFFF) + be16(1) + be16(2) + be32(3) + be16(0) +
+      [0x00, 0x80, 0xC2, 0x00, 0x01, 0x00]
+    let bytes = be16(DescriptorType.ptpPort.rawValue) + be16(0) + body
+    guard case let (_, _, .ptpPort(descriptor)) = try readDescriptorResponse(bytes) else {
+      return XCTFail("expected PTP_PORT")
+    }
+    XCTAssertEqual(UInt64(eui48: descriptor.profileIdentifier), 0x0080_C200_0100)
+    var context = SerializationContext()
+    try Descriptor.ptpPort(descriptor).serialize(descriptorIndex: 0, into: &context)
+    XCTAssertEqual(context.bytes, bytes)
+
+    let mutations: [(String, (inout PtpPortDescriptor) -> ())] = [
+      ("objectName", { $0.objectName = "" }),
+      ("localizedDescription", { $0.localizedDescription = LocalizedStringReference(rawValue: 0) }),
+      ("portNumber", { $0.portNumber = 0 }),
+      ("portType", { $0.portType = 0 }),
+      ("flags", { $0.flags = 0 }),
+      ("avbInterfaceIndex", { $0.avbInterfaceIndex = 1 }),
+      ("profileIdentifier", { $0.profileIdentifier[5] = 1 }),
+    ]
+    assertEveryFieldIsCompared(descriptor, mutations)
   }
 }

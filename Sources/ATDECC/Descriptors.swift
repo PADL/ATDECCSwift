@@ -528,7 +528,7 @@ public struct AvbInterfaceDescriptor: Sendable, Hashable, CustomStringConvertibl
 
   public var objectName: String
   public var localizedDescription: LocalizedStringReference
-  public var macAddress: [UInt8]
+  public var macAddress: EUI48
   public var interfaceFlags: AvbInterfaceFlags
   public var clockIdentity: UniqueIdentifier
   public var priority1: UInt8
@@ -546,7 +546,7 @@ public struct AvbInterfaceDescriptor: Sendable, Hashable, CustomStringConvertibl
     try input.requireRemaining(Self.bodyLength)
     objectName = try String(parsingAvdeccFixedString: &input)
     localizedDescription = try LocalizedStringReference(parsing: &input)
-    macAddress = try _parseMacAddress(&input)
+    macAddress = try _eui48(parsing: &input)
     interfaceFlags = try AvbInterfaceFlags(rawValue: UInt16(parsingBigEndian: &input))
     clockIdentity = try UniqueIdentifier(parsing: &input)
     priority1 = try UInt8(parsing: &input)
@@ -564,7 +564,7 @@ public struct AvbInterfaceDescriptor: Sendable, Hashable, CustomStringConvertibl
   func serializeBody(into context: inout SerializationContext) throws {
     context.serialize(avdeccFixedString: objectName)
     try context.serialize(localizedDescription)
-    context.serialize(macAddress: macAddress)
+    context.serialize(eui48: macAddress)
     context.serialize(uint16: interfaceFlags.rawValue)
     try context.serialize(clockIdentity)
     context.serialize(uint8: priority1)
@@ -581,10 +581,47 @@ public struct AvbInterfaceDescriptor: Sendable, Hashable, CustomStringConvertibl
 
   public var description: String {
     "AvbInterfaceDescriptor(name: \"\(objectName)\"" +
-      ", mac: \(_macAddressString(macAddress))" +
+      ", mac: \(_macAddressToString(macAddress))" +
       ", clockIdentity: \(clockIdentity)" +
       ", priority1: \(priority1), priority2: \(priority2)" +
       ", clockClass: \(clockClass), domain: \(domainNumber))"
+  }
+
+  // written out, as EUI48 (an InlineArray) is not Hashable
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.objectName == rhs.objectName &&
+      lhs.localizedDescription == rhs.localizedDescription &&
+      _isEqualMacAddress(lhs.macAddress, rhs.macAddress) &&
+      lhs.interfaceFlags == rhs.interfaceFlags &&
+      lhs.clockIdentity == rhs.clockIdentity &&
+      lhs.priority1 == rhs.priority1 &&
+      lhs.clockClass == rhs.clockClass &&
+      lhs.offsetScaledLogVariance == rhs.offsetScaledLogVariance &&
+      lhs.clockAccuracy == rhs.clockAccuracy &&
+      lhs.priority2 == rhs.priority2 &&
+      lhs.domainNumber == rhs.domainNumber &&
+      lhs.logSyncInterval == rhs.logSyncInterval &&
+      lhs.logAnnounceInterval == rhs.logAnnounceInterval &&
+      lhs.logPDelayInterval == rhs.logPDelayInterval &&
+      lhs.portNumber == rhs.portNumber
+  }
+
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(objectName)
+    hasher.combine(localizedDescription)
+    _hashMacAddress(macAddress, into: &hasher)
+    hasher.combine(interfaceFlags)
+    hasher.combine(clockIdentity)
+    hasher.combine(priority1)
+    hasher.combine(clockClass)
+    hasher.combine(offsetScaledLogVariance)
+    hasher.combine(clockAccuracy)
+    hasher.combine(priority2)
+    hasher.combine(domainNumber)
+    hasher.combine(logSyncInterval)
+    hasher.combine(logAnnounceInterval)
+    hasher.combine(logPDelayInterval)
+    hasher.combine(portNumber)
   }
 }
 
@@ -1132,7 +1169,8 @@ public struct PtpPortDescriptor: Sendable, Hashable, CustomStringConvertible {
   public var portType: UInt16
   public var flags: UInt32
   public var avbInterfaceIndex: UInt16
-  public var profileIdentifier: [UInt8]
+  /// The six-octet PTP profileIdentifier.
+  public var profileIdentifier: EUI48
 
   init(parsingBody input: inout ParserSpan) throws {
     try input.requireRemaining(Self.bodyLength)
@@ -1142,7 +1180,7 @@ public struct PtpPortDescriptor: Sendable, Hashable, CustomStringConvertible {
     portType = try UInt16(parsingBigEndian: &input)
     flags = try UInt32(parsingBigEndian: &input)
     avbInterfaceIndex = try UInt16(parsingBigEndian: &input)
-    profileIdentifier = try [UInt8](parsing: &input, byteCount: 6)
+    profileIdentifier = try _eui48(parsing: &input)
   }
 
   func serializeBody(into context: inout SerializationContext) throws {
@@ -1152,12 +1190,33 @@ public struct PtpPortDescriptor: Sendable, Hashable, CustomStringConvertible {
     context.serialize(uint16: portType)
     context.serialize(uint32: flags)
     context.serialize(uint16: avbInterfaceIndex)
-    context.serialize(macAddress: profileIdentifier)
+    context.serialize(eui48: profileIdentifier)
   }
 
   public var description: String {
     "PtpPortDescriptor(name: \"\(objectName)\"" +
       ", portNumber: \(portNumber), avbInterface: \(avbInterfaceIndex))"
+  }
+
+  // written out, as EUI48 (an InlineArray) is not Hashable
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.objectName == rhs.objectName &&
+      lhs.localizedDescription == rhs.localizedDescription &&
+      lhs.portNumber == rhs.portNumber &&
+      lhs.portType == rhs.portType &&
+      lhs.flags == rhs.flags &&
+      lhs.avbInterfaceIndex == rhs.avbInterfaceIndex &&
+      _isEqualMacAddress(lhs.profileIdentifier, rhs.profileIdentifier)
+  }
+
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(objectName)
+    hasher.combine(localizedDescription)
+    hasher.combine(portNumber)
+    hasher.combine(portType)
+    hasher.combine(flags)
+    hasher.combine(avbInterfaceIndex)
+    _hashMacAddress(profileIdentifier, into: &hasher)
   }
 }
 
@@ -1307,11 +1366,9 @@ public enum Descriptor: Sendable, Hashable {
     descriptorIndex: DescriptorIndex,
     into context: inout SerializationContext
   ) throws {
-    var descriptor = SerializationContext()
-    descriptor.serialize(uint16: descriptorTypeRaw)
-    descriptor.serialize(uint16: descriptorIndex)
-    try serializeBody(into: &descriptor)
-    context.serialize(descriptor.bytes)
+    context.serialize(uint16: descriptorTypeRaw)
+    context.serialize(uint16: descriptorIndex)
+    try serializeBody(into: &context)
   }
 }
 

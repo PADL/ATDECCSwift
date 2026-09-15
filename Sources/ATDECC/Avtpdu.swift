@@ -91,6 +91,15 @@ public enum AvdeccPdu: Sendable, Hashable {
   case adp(Adpdu)
   case aecp(Aecpdu)
   case acmp(Acmpdu)
+
+  /// The length of the serialized PDU, before any Ethernet padding.
+  var serializedLength: Int {
+    switch self {
+    case .adp: AvtpduControlHeader.length + Int(Adpdu.length)
+    case let .aecp(aecpdu): aecpdu.serializedLength
+    case .acmp: AvtpduControlHeader.length + Int(Acmpdu.length)
+    }
+  }
 }
 
 extension AvdeccPdu: SerDes {
@@ -111,6 +120,7 @@ extension AvdeccPdu: SerDes {
   }
 
   public func serialize(into serializationContext: inout SerializationContext) throws {
+    serializationContext.reserveCapacity(serializationContext.position + serializedLength)
     switch self {
     case let .adp(adpdu):
       try adpdu.serialize(into: &serializationContext)

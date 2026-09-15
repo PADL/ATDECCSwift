@@ -803,8 +803,9 @@ public enum AemResponsePayload: Sendable, Hashable {
       case .getCounters:
         let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
         let countersValid = try UInt32(parsingBigEndian: &input)
-        let counters = try (0..<DescriptorCounters.count).map { _ in
-          try UInt32(parsingBigEndian: &input)
+        var counters = DescriptorCounters.Counters(repeating: 0)
+        for index in counters.indices {
+          counters[index] = try UInt32(parsingBigEndian: &input)
         }
         return .getCounters(
           descriptorType: descriptorType,
@@ -962,7 +963,7 @@ extension StreamInfo {
     streamFormat = try StreamFormat(parsing: &input)
     streamID = try UniqueIdentifier(parsing: &input)
     msrpAccumulatedLatency = try UInt32(parsingBigEndian: &input)
-    streamDestMac = try _parseMacAddress(&input)
+    streamDestMac = try _eui48(parsing: &input)
     msrpFailureCode = try UInt8(parsing: &input)
     _ = try UInt8(parsing: &input) // reserved
     msrpFailureBridgeID = try UInt64(parsingBigEndian: &input)
@@ -973,7 +974,7 @@ extension StreamInfo {
 
     if payloadLength >= _ieee2021StreamInfoLength {
       // ip_flags, source_port, destination_port, source_ip_address, destination_ip_address
-      _ = try [UInt8](parsing: &input, byteCount: _ieee2021StreamInfoLength - _streamInfoLength + 2)
+      _ = try input.sliceSpan(byteCount: _ieee2021StreamInfoLength - _streamInfoLength + 2)
     } else if payloadLength >= _milanStreamInfoLength {
       _ = try UInt16(parsingBigEndian: &input) // reserved
       streamInfoFlagsEx = try StreamInfoFlagsEx(rawValue: UInt32(parsingBigEndian: &input))
@@ -994,7 +995,7 @@ extension StreamInfo {
     try context.serialize(streamFormat)
     try context.serialize(streamID)
     context.serialize(uint32: msrpAccumulatedLatency)
-    context.serialize(macAddress: streamDestMac)
+    context.serialize(eui48: streamDestMac)
     context.serialize(uint8: msrpFailureCode)
     context.serialize(uint8: 0) // reserved
     context.serialize(uint64: msrpFailureBridgeID)

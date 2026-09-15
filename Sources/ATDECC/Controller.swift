@@ -438,7 +438,7 @@ public actor Controller<Port: NetworkPort> {
   func _handle(_ adpdu: Adpdu, from sourceMacAddress: EUI48) {
     switch adpdu.messageType {
     case .entityAvailable:
-      _apply(_discovery.handleEntityAvailable(adpdu, macAddress: sourceMacAddress.bytes))
+      _apply(_discovery.handleEntityAvailable(adpdu, macAddress: sourceMacAddress))
     case .entityDeparting:
       _apply(_discovery.handleEntityDeparting(adpdu))
     case .entityDiscover:
@@ -647,7 +647,7 @@ public actor Controller<Port: NetworkPort> {
         controllerEntityID: entityID,
         sequenceID: sequenceID,
         commandType: .deregisterUnsolicitedNotification
-      ))), destination: EUI48(bytes: macAddress)))
+      ))), destination: macAddress))
     }
   }
 
@@ -671,7 +671,7 @@ public actor Controller<Port: NetworkPort> {
     _aecpTargets[targetEntityID, default: AecpTarget()].queued.append(AecpTransaction(
       sequenceID: sequenceID,
       aecpdu: makeAecpdu(sequenceID),
-      destination: EUI48(bytes: macAddress),
+      destination: macAddress,
       promise: promise,
       timer: timer
     ))

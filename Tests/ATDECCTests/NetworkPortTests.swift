@@ -124,6 +124,48 @@ final class VirtualPortTests: XCTestCase {
   }
 }
 
+final class EndStationTests: XCTestCase {
+  // a PDU shorter than the Ethernet minimum payload is padded with zeros, and a longer one sent as
+  // it is
+  func testSentPdusArePaddedToTheEthernetMinimum() async throws {
+    let network = VirtualNetwork()
+    let endStation = EndStation(port: network.makePort(macAddress: firstMacAddress))
+    let peer = network.makePort(macAddress: secondMacAddress)
+    let payloads = Mutex([[UInt8]]())
+    let reception = Task {
+      try await peer.receive { packet in
+        payloads.withLock { $0.append(packet.payload) }
+      }
+    }
+    defer { reception.cancel() }
+    // let reception begin
+    try await Task.sleep(for: .milliseconds(20))
+
+    let command = AvdeccPdu.aecp(.aem(AemAecpdu(
+      isResponse: false,
+      targetEntityID: UniqueIdentifier(1),
+      controllerEntityID: UniqueIdentifier(2),
+      commandType: .getCounters,
+      commandSpecificData: [0x00, 0x05, 0x00, 0x00]
+    )))
+    let advertisement = AvdeccPdu.adp(Adpdu(messageType: .entityAvailable, entityID: UniqueIdentifier(3)))
+    try await endStation.send(command, to: .unicast(secondMacAddress))
+    try await endStation.send(advertisement, to: .multicast)
+
+    let deadline = ContinuousClock.now + .seconds(1)
+    while payloads.withLock({ $0.count }) < 2, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let received = payloads.withLock { $0 }
+    guard received.count == 2 else { return XCTFail("received \(received.count) frames") }
+    let commandBytes = try command.serialized()
+    XCTAssertEqual(commandBytes.count, 28)
+    XCTAssertEqual(received[0], commandBytes + [UInt8](repeating: 0, count: 46 - commandBytes.count))
+    XCTAssertEqual(received[1], try advertisement.serialized())
+    XCTAssertEqual(received[1].count, 68)
+  }
+}
+
 #if os(Linux)
 
 private let testInterfaceIndex = 7

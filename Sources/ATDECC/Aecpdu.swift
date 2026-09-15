@@ -355,18 +355,19 @@ extension Aecpdu: SerDes {
           commandSpecificData: [UInt8](parsing: &input, byteCount: specificDataLength)
         ))
       } else {
-        var specificData = [UInt8]()
-        var context = SerializationContext()
-        context.serialize(uint64: protocolIdentifier)
-        specificData = Array(context.bytes.suffix(_protocolIdentifierLength))
-        specificData += try [UInt8](parsing: &input, byteCount: specificDataLength)
+        // another vendor's protocol_id is kept at the start of the undecoded data
+        var specificData = SerializationContext()
+        specificData.reserveCapacity(_protocolIdentifierLength + specificDataLength)
+        specificData.serialize(protocolIdentifier: protocolIdentifier)
+        let data = try input.sliceSpan(byteCount: specificDataLength)
+        data.withUnsafeBytes { specificData.serialize(contentsOf: $0) }
         self = .other(
           messageType: header.controlData,
           status: header.status,
           targetEntityID: targetEntityID,
           controllerEntityID: controllerEntityID,
           sequenceID: sequenceID,
-          specificData: specificData
+          specificData: specificData.bytes
         )
       }
     default:
@@ -382,42 +383,17 @@ extension Aecpdu: SerDes {
   }
 
   public func serialize(into serializationContext: inout SerializationContext) throws {
-    let messageType: UInt8
-    let status: UInt8
-    var specificData = SerializationContext()
-
-    switch self {
-    case let .aem(aem):
-      messageType = aem.messageType.rawValue
-      status = aem.status
-      specificData.serialize(
-        uint16: (aem.unsolicited ? _unsolicitedFlag : 0) |
-          (aem.controllerRequest ? _controllerRequestFlag : 0) |
-          (aem.commandTypeRaw & _aemCommandTypeMask)
-      )
-      specificData.serialize(aem.commandSpecificData)
-    case let .mvu(mvu):
-      messageType = mvu.messageType.rawValue
-      status = mvu.status
-      var protocolIdentifier = SerializationContext()
-      protocolIdentifier.serialize(uint64: MvuProtocolIdentifier)
-      specificData.serialize(Array(protocolIdentifier.bytes.suffix(_protocolIdentifierLength)))
-      specificData.serialize(
-        uint16: (mvu.unsolicited ? _unsolicitedFlag : 0) | (mvu.commandTypeRaw & _mvuCommandTypeMask)
-      )
-      specificData.serialize(mvu.commandSpecificData)
-    case let .other(otherMessageType, otherStatus, _, _, _, data):
-      messageType = otherMessageType
-      status = otherStatus
-      specificData.serialize(data)
-    }
-
-    let controlDataLength = _aecpduHeaderLength + specificData.bytes.count
+    let controlDataLength = _aecpduHeaderLength + _specificDataLength
     guard controlDataLength <= 0x07FF else { throw AvdeccCodecError.valueTooLarge }
 
+    let status: UInt8 = switch self {
+    case let .aem(aem): aem.status
+    case let .mvu(mvu): mvu.status
+    case let .other(_, otherStatus, _, _, _, _): otherStatus
+    }
     let header = AvtpduControlHeader(
       subtype: .aecp,
-      controlData: messageType,
+      controlData: messageTypeRaw,
       status: status,
       controlDataLength: UInt16(controlDataLength),
       streamID: targetEntityID.rawValue
@@ -425,7 +401,49 @@ extension Aecpdu: SerDes {
     try serializationContext.serialize(header)
     try serializationContext.serialize(controllerEntityID)
     serializationContext.serialize(uint16: sequenceID)
-    serializationContext.serialize(specificData.bytes)
+
+    switch self {
+    case let .aem(aem):
+      serializationContext.serialize(
+        uint16: (aem.unsolicited ? _unsolicitedFlag : 0) |
+          (aem.controllerRequest ? _controllerRequestFlag : 0) |
+          (aem.commandTypeRaw & _aemCommandTypeMask)
+      )
+      serializationContext.serialize(aem.commandSpecificData)
+    case let .mvu(mvu):
+      serializationContext.serialize(protocolIdentifier: MvuProtocolIdentifier)
+      serializationContext.serialize(
+        uint16: (mvu.unsolicited ? _unsolicitedFlag : 0) | (mvu.commandTypeRaw & _mvuCommandTypeMask)
+      )
+      serializationContext.serialize(mvu.commandSpecificData)
+    case let .other(_, _, _, _, _, data):
+      serializationContext.serialize(data)
+    }
+  }
+
+  /// The length of the serialized AECPDU.
+  var serializedLength: Int {
+    AvtpduControlHeader.length + _aecpduHeaderLength + _specificDataLength
+  }
+
+  /// The octets following sequence_id.
+  private var _specificDataLength: Int {
+    switch self {
+    case let .aem(aem):
+      _commandTypeLength + aem.commandSpecificData.count
+    case let .mvu(mvu):
+      _protocolIdentifierLength + _commandTypeLength + mvu.commandSpecificData.count
+    case let .other(_, _, _, _, _, data):
+      data.count
+    }
+  }
+}
+
+private extension SerializationContext {
+  /// Serializes a six-octet protocol_id (IEEE 1722.1-2021 §9.2.1.3).
+  mutating func serialize(protocolIdentifier: UInt64) {
+    serialize(uint16: UInt16(truncatingIfNeeded: protocolIdentifier >> 32))
+    serialize(uint32: UInt32(truncatingIfNeeded: protocolIdentifier))
   }
 }
 

@@ -14,6 +14,7 @@
 // limitations under the License.
 //
 
+import IEEE802
 
 /// A change in the set of discovered entities.
 enum DiscoveryEvent: Sendable {
@@ -53,7 +54,7 @@ struct DiscoveryStateMachine: Sendable {
 
   mutating func handleEntityAvailable(
     _ adpdu: Adpdu,
-    macAddress: [UInt8],
+    macAddress: EUI48,
     now: ContinuousClock.Instant = .now
   ) -> [DiscoveryEvent] {
     // an entity that is not ready must not be enumerated (IEEE 1722.1-2021 §6.2.2.10)
@@ -141,7 +142,7 @@ struct DiscoveryStateMachine: Sendable {
     if var known = entity.interfacesInformation[interfaceIndex] {
       // an interface's MAC address is fixed, and its available_index only increases while
       // the entity stays available
-      guard known.macAddress == interface.macAddress,
+      guard _isEqualMacAddress(known.macAddress, interface.macAddress),
             known.availableIndex < interface.availableIndex
       else {
         return .replaced

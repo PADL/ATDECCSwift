@@ -285,10 +285,6 @@ extension FixedWidthInteger {
   }
 }
 
-func _macAddressString(_ bytes: [UInt8]) -> String {
-  bytes.map { $0.paddedHex(width: 2) }.joined(separator: ":")
-}
-
 extension String {
   /// Parses a NUL-padded 64-octet UTF-8 string (IEEE 1722.1-2021 §7.3.5), which is not
   /// NUL-terminated when it fills the field. Invalid UTF-8 is repaired.
@@ -314,19 +310,12 @@ extension SerializationContext {
         length += characterLength
       }
     }
-    var bytes = [UInt8](repeating: 0, count: AvdeccFixedStringLength)
-    bytes.replaceSubrange(0..<length, with: string.utf8.prefix(length))
-    serialize(bytes)
+    serialize(contentsOf: string.utf8.prefix(length))
+    serialize(repeating: 0, count: AvdeccFixedStringLength - length)
   }
 
   mutating func serialize(_ value: some Serializable) throws {
     try value.serialize(into: &self)
-  }
-
-  mutating func serialize(macAddress: [UInt8]) {
-    var bytes = Array(macAddress.prefix(6))
-    bytes += [UInt8](repeating: 0, count: 6 - bytes.count)
-    serialize(bytes)
   }
 }
 
@@ -343,8 +332,4 @@ extension ParserSpan {
   func requireRemaining(_ count: some BinaryInteger, of elementLength: Int) throws {
     try requireRemaining(Int(count) * elementLength)
   }
-}
-
-func _parseMacAddress(_ input: inout ParserSpan) throws -> [UInt8] {
-  try [UInt8](parsing: &input, byteCount: 6)
 }

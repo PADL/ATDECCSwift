@@ -15,6 +15,7 @@
 //
 
 import ATDECC
+import IEEE802
 import XCTest
 
 final class ModelTests: XCTestCase {
@@ -146,7 +147,7 @@ final class ModelTests: XCTestCase {
   func testStreamInfoDefaultsAndMutation() {
     var info = StreamInfo()
     XCTAssertEqual(info.streamFormat.format, 0)
-    XCTAssertEqual(info.streamDestMac, [0, 0, 0, 0, 0, 0])
+    XCTAssertEqual(UInt64(eui48: info.streamDestMac), 0)
     XCTAssertNil(info.streamInfoFlagsEx)
 
     info.streamID = UniqueIdentifier(0x1234)
@@ -228,5 +229,123 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(MemoryObjectOperationType(rawValue: 0), .store)
     XCTAssertEqual(MemoryObjectOperationType.upload.rawValue, 4)
     XCTAssertNil(MemoryObjectOperationType(rawValue: 0x1000))
+  }
+}
+
+/// Checks that each mutation changes both the equality and the hash of `value`: that every field
+/// takes part in a hand-written Hashable conformance.
+func assertEveryFieldIsCompared<T: Hashable>(
+  _ value: T,
+  _ mutations: [(String, (inout T) -> ())],
+  file: StaticString = #filePath,
+  line: UInt = #line
+) {
+  let copy = value
+  XCTAssertEqual(copy, value, file: file, line: line)
+  XCTAssertEqual(copy.hashValue, value.hashValue, file: file, line: line)
+  for (field, mutate) in mutations {
+    var mutated = value
+    mutate(&mutated)
+    XCTAssertNotEqual(mutated, value, "\(field) is not compared", file: file, line: line)
+    XCTAssertNotEqual(mutated.hashValue, value.hashValue, "\(field) is not hashed", file: file, line: line)
+  }
+}
+
+// Types holding an EUI48 or InlineArray, which is not Hashable, write out their conformances.
+final class HashableConformanceTests: XCTestCase {
+  func testAcmpduComparesEveryField() {
+    let acmpdu = Acmpdu(
+      messageType: .connectRxCommand,
+      status: 1,
+      streamID: UniqueIdentifier(2),
+      controllerEntityID: UniqueIdentifier(3),
+      talkerEntityID: UniqueIdentifier(4),
+      listenerEntityID: UniqueIdentifier(5),
+      talkerUniqueID: 6,
+      listenerUniqueID: 7,
+      streamDestAddress: [0x91, 0xE0, 0xF0, 0x00, 0x00, 0x08],
+      connectionCount: 9,
+      sequenceID: 10,
+      flags: [.classB],
+      streamVlanID: 11
+    )
+    let mutations: [(String, (inout Acmpdu) -> ())] = [
+      ("messageType", { $0.messageType = .connectRxResponse }),
+      ("status", { $0.status = 0 }),
+      ("streamID", { $0.streamID = UniqueIdentifier(0) }),
+      ("controllerEntityID", { $0.controllerEntityID = UniqueIdentifier(0) }),
+      ("talkerEntityID", { $0.talkerEntityID = UniqueIdentifier(0) }),
+      ("listenerEntityID", { $0.listenerEntityID = UniqueIdentifier(0) }),
+      ("talkerUniqueID", { $0.talkerUniqueID = 0 }),
+      ("listenerUniqueID", { $0.listenerUniqueID = 0 }),
+      ("streamDestAddress", { $0.streamDestAddress[5] = 0 }),
+      ("connectionCount", { $0.connectionCount = 0 }),
+      ("sequenceID", { $0.sequenceID = 0 }),
+      ("flags", { $0.flags = [] }),
+      ("streamVlanID", { $0.streamVlanID = 0 }),
+    ]
+    assertEveryFieldIsCompared(acmpdu, mutations)
+  }
+
+  func testStreamInfoComparesEveryField() {
+    let info = StreamInfo(
+      streamFormat: StreamFormat(format: 0x0205_0220_0040_6000),
+      streamID: UniqueIdentifier(1),
+      msrpAccumulatedLatency: 2,
+      streamVlanID: 3,
+      streamInfoFlags: [.connected],
+      streamDestMac: [0x91, 0xE0, 0xF0, 0x00, 0x00, 0x04],
+      msrpFailureCode: 5,
+      msrpFailureBridgeID: 6,
+      streamInfoFlagsEx: .registering,
+      probingStatusRaw: 7,
+      acmpStatusRaw: 8
+    )
+    let mutations: [(String, (inout StreamInfo) -> ())] = [
+      ("streamFormat", { $0.streamFormat = StreamFormat(format: 0) }),
+      ("streamID", { $0.streamID = UniqueIdentifier(0) }),
+      ("msrpAccumulatedLatency", { $0.msrpAccumulatedLatency = 0 }),
+      ("streamVlanID", { $0.streamVlanID = 0 }),
+      ("streamInfoFlags", { $0.streamInfoFlags = [] }),
+      ("streamDestMac", { $0.streamDestMac[5] = 0 }),
+      ("msrpFailureCode", { $0.msrpFailureCode = 0 }),
+      ("msrpFailureBridgeID", { $0.msrpFailureBridgeID = 0 }),
+      ("streamInfoFlagsEx", { $0.streamInfoFlagsEx = nil }),
+      ("probingStatusRaw", { $0.probingStatusRaw = nil }),
+      ("acmpStatusRaw", { $0.acmpStatusRaw = nil }),
+    ]
+    assertEveryFieldIsCompared(info, mutations)
+  }
+
+  func testInterfaceInformationComparesEveryField() {
+    let interface = Entity.InterfaceInformation(
+      macAddress: [0x02, 0x00, 0x00, 0x00, 0x00, 0x01],
+      validTime: 2,
+      availableIndex: 3,
+      gptpGrandmasterID: UniqueIdentifier(4),
+      gptpDomainNumber: 5
+    )
+    let mutations: [(String, (inout Entity.InterfaceInformation) -> ())] = [
+      ("macAddress", { $0.macAddress[5] = 0 }),
+      ("validTime", { $0.validTime = 0 }),
+      ("availableIndex", { $0.availableIndex = 0 }),
+      ("gptpGrandmasterID", { $0.gptpGrandmasterID = nil }),
+      ("gptpDomainNumber", { $0.gptpDomainNumber = nil }),
+    ]
+    assertEveryFieldIsCompared(interface, mutations)
+  }
+
+  func testDescriptorCountersComparesEveryCounter() {
+    let values = (0..<UInt32(DescriptorCounters.count)).map { 100 + $0 }
+    let counters = DescriptorCounters(values)
+    let mutations: [(String, (inout DescriptorCounters) -> ())] = (0..<DescriptorCounters.count).map { index in
+      ("counter \(index)", { counters in
+        var changed = values
+        changed[index] = 0
+        counters = DescriptorCounters(changed)
+      })
+    }
+    assertEveryFieldIsCompared(counters, mutations)
+    XCTAssertEqual(counters[31], 131)
   }
 }
