@@ -147,6 +147,29 @@ public enum AemCommandPayload: Sendable, Hashable {
   case setSamplingRateRange(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, samplingRateRange: UInt64)
   case getSamplingRateRange(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
   case getPathLatency(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case setVideoFormat(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, videoFormat: VideoFormat)
+  case getVideoFormat(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case setSensorFormat(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, sensorFormat: UInt64)
+  case getSensorFormat(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case getVideoMap(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, mapIndex: UInt16)
+  case addVideoMappings(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, mappings: [VideoMapping])
+  case removeVideoMappings(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, mappings: [VideoMapping])
+  case getSensorMap(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, mapIndex: UInt16)
+  case addSensorMappings(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, mappings: [SensorMapping])
+  case removeSensorMappings(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, mappings: [SensorMapping])
+  case setSignalSelector(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, source: SignalSource)
+  case getSignalSelector(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  /// `values` is packed as the MIXER descriptor's control_value_type describes (§7.4.31).
+  case setMixer(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, values: [UInt8])
+  case getMixer(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  /// `values` is packed as the MATRIX descriptor's control_value_type describes (§7.4.33).
+  case setMatrix(
+    descriptorType: DescriptorType,
+    descriptorIndex: DescriptorIndex,
+    subregion: MatrixSubregion,
+    values: [UInt8]
+  )
+  case getMatrix(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, subregion: MatrixSubregion)
   /// Fixed-size GET commands answered together (IEEE 1722.1-2021 §7.4.76).
   case getDynamicInfo(commands: [AemCommandPayload])
   /// A command without a dedicated model.
@@ -202,6 +225,22 @@ public enum AemCommandPayload: Sendable, Hashable {
     case .setSamplingRateRange: AemCommandType.setSamplingRateRange.rawValue
     case .getSamplingRateRange: AemCommandType.getSamplingRateRange.rawValue
     case .getPathLatency: AemCommandType.getPathLatency.rawValue
+    case .setVideoFormat: AemCommandType.setVideoFormat.rawValue
+    case .getVideoFormat: AemCommandType.getVideoFormat.rawValue
+    case .setSensorFormat: AemCommandType.setSensorFormat.rawValue
+    case .getSensorFormat: AemCommandType.getSensorFormat.rawValue
+    case .getVideoMap: AemCommandType.getVideoMap.rawValue
+    case .addVideoMappings: AemCommandType.addVideoMappings.rawValue
+    case .removeVideoMappings: AemCommandType.removeVideoMappings.rawValue
+    case .getSensorMap: AemCommandType.getSensorMap.rawValue
+    case .addSensorMappings: AemCommandType.addSensorMappings.rawValue
+    case .removeSensorMappings: AemCommandType.removeSensorMappings.rawValue
+    case .setSignalSelector: AemCommandType.setSignalSelector.rawValue
+    case .getSignalSelector: AemCommandType.getSignalSelector.rawValue
+    case .setMixer: AemCommandType.setMixer.rawValue
+    case .getMixer: AemCommandType.getMixer.rawValue
+    case .setMatrix: AemCommandType.setMatrix.rawValue
+    case .getMatrix: AemCommandType.getMatrix.rawValue
     case .getDynamicInfo: AemCommandType.getDynamicInfo.rawValue
     case let .other(commandType, _): commandType
     }
@@ -256,7 +295,11 @@ public enum AemCommandPayload: Sendable, Hashable {
          let .getMaxTransitTime(descriptorType, descriptorIndex),
          let .getStreamBackup(descriptorType, descriptorIndex),
          let .getSamplingRateRange(descriptorType, descriptorIndex),
-         let .getPathLatency(descriptorType, descriptorIndex):
+         let .getPathLatency(descriptorType, descriptorIndex),
+         let .getVideoFormat(descriptorType, descriptorIndex),
+         let .getSensorFormat(descriptorType, descriptorIndex),
+         let .getSignalSelector(descriptorType, descriptorIndex),
+         let .getMixer(descriptorType, descriptorIndex):
       try context.serialize(descriptorType)
       context.serialize(uint16: descriptorIndex)
     case let .setStreamInfo(descriptorType, descriptorIndex, streamInfo):
@@ -305,9 +348,21 @@ public enum AemCommandPayload: Sendable, Hashable {
       context.serialize(uint16: descriptorIndex)
       context.serialize(uint16: mapIndex)
       context.serialize(uint16: 0) // reserved
+    case let .getVideoMap(descriptorType, descriptorIndex, mapIndex),
+         let .getSensorMap(descriptorType, descriptorIndex, mapIndex):
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      context.serialize(uint16: mapIndex)
+      context.serialize(uint16: 0) // reserved
     case let .addAudioMappings(descriptorType, descriptorIndex, mappings),
          let .removeAudioMappings(descriptorType, descriptorIndex, mappings):
-      try _serializeAudioMappings(descriptorType, descriptorIndex, mappings, into: &context)
+      try _serializeMappings(descriptorType, descriptorIndex, mappings, into: &context) { try $1.serialize($0) }
+    case let .addVideoMappings(descriptorType, descriptorIndex, mappings),
+         let .removeVideoMappings(descriptorType, descriptorIndex, mappings):
+      try _serializeMappings(descriptorType, descriptorIndex, mappings, into: &context) { $0.serialize(into: &$1) }
+    case let .addSensorMappings(descriptorType, descriptorIndex, mappings),
+         let .removeSensorMappings(descriptorType, descriptorIndex, mappings):
+      try _serializeMappings(descriptorType, descriptorIndex, mappings, into: &context) { $0.serialize(into: &$1) }
     case let .startOperation(descriptorType, descriptorIndex, operationID, operationType, values):
       try context.serialize(descriptorType)
       context.serialize(uint16: descriptorIndex)
@@ -340,6 +395,32 @@ public enum AemCommandPayload: Sendable, Hashable {
       try context.serialize(descriptorType)
       context.serialize(uint16: descriptorIndex)
       context.serialize(uint64: samplingRateRange)
+    case let .setVideoFormat(descriptorType, descriptorIndex, videoFormat):
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      videoFormat.serialize(into: &context)
+    case let .setSensorFormat(descriptorType, descriptorIndex, sensorFormat):
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      context.serialize(uint64: sensorFormat)
+    case let .setSignalSelector(descriptorType, descriptorIndex, source):
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      try source.serialize(into: &context)
+      context.serialize(uint16: 0) // reserved
+    case let .setMixer(descriptorType, descriptorIndex, values):
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      context.serialize(values)
+    case let .setMatrix(descriptorType, descriptorIndex, subregion, values):
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      try subregion.serialize(into: &context)
+      context.serialize(values)
+    case let .getMatrix(descriptorType, descriptorIndex, subregion):
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      try subregion.serialize(into: &context, repeats: false)
     case let .getDynamicInfo(commands):
       for command in commands {
         let data = try command.serialized()
@@ -497,14 +578,18 @@ public enum AemCommandPayload: Sendable, Hashable {
           mapIndex: UInt16(parsingBigEndian: &input)
         )
       case .addAudioMappings:
-        let (descriptorType, descriptorIndex, mappings) = try _parseAudioMappings(&input)
+        let (descriptorType, descriptorIndex, mappings) = try _parseMappings(&input, length: AudioMapping.length) {
+          try AudioMapping(parsing: &$0)
+        }
         return .addAudioMappings(
           descriptorType: descriptorType,
           descriptorIndex: descriptorIndex,
           mappings: mappings
         )
       case .removeAudioMappings:
-        let (descriptorType, descriptorIndex, mappings) = try _parseAudioMappings(&input)
+        let (descriptorType, descriptorIndex, mappings) = try _parseMappings(&input, length: AudioMapping.length) {
+          try AudioMapping(parsing: &$0)
+        }
         return .removeAudioMappings(
           descriptorType: descriptorType,
           descriptorIndex: descriptorIndex,
@@ -576,6 +661,81 @@ public enum AemCommandPayload: Sendable, Hashable {
       case .getPathLatency:
         let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
         return .getPathLatency(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .setVideoFormat:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setVideoFormat(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          videoFormat: VideoFormat(parsing: &input)
+        )
+      case .getVideoFormat:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getVideoFormat(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .setSensorFormat:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setSensorFormat(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          sensorFormat: UInt64(parsingBigEndian: &input)
+        )
+      case .getSensorFormat:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getSensorFormat(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .getVideoMap, .getSensorMap:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        let mapIndex = try UInt16(parsingBigEndian: &input)
+        return commandTypeRaw == AemCommandType.getVideoMap.rawValue
+          ? .getVideoMap(descriptorType: descriptorType, descriptorIndex: descriptorIndex, mapIndex: mapIndex)
+          : .getSensorMap(descriptorType: descriptorType, descriptorIndex: descriptorIndex, mapIndex: mapIndex)
+      case .addVideoMappings, .removeVideoMappings:
+        let (descriptorType, descriptorIndex, mappings) = try _parseMappings(&input, length: VideoMapping.length) {
+          try VideoMapping(parsing: &$0)
+        }
+        return commandTypeRaw == AemCommandType.addVideoMappings.rawValue
+          ? .addVideoMappings(descriptorType: descriptorType, descriptorIndex: descriptorIndex, mappings: mappings)
+          : .removeVideoMappings(descriptorType: descriptorType, descriptorIndex: descriptorIndex, mappings: mappings)
+      case .addSensorMappings, .removeSensorMappings:
+        let (descriptorType, descriptorIndex, mappings) = try _parseMappings(&input, length: SensorMapping.length) {
+          try SensorMapping(parsing: &$0)
+        }
+        return commandTypeRaw == AemCommandType.addSensorMappings.rawValue
+          ? .addSensorMappings(descriptorType: descriptorType, descriptorIndex: descriptorIndex, mappings: mappings)
+          : .removeSensorMappings(descriptorType: descriptorType, descriptorIndex: descriptorIndex, mappings: mappings)
+      case .setSignalSelector:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setSignalSelector(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          source: _parseSignalSelector(&input)
+        )
+      case .getSignalSelector:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getSignalSelector(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .setMixer:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setMixer(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          values: [UInt8](parsingRemainingBytes: &input)
+        )
+      case .getMixer:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getMixer(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .setMatrix:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setMatrix(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          subregion: MatrixSubregion(parsing: &input),
+          values: [UInt8](parsingRemainingBytes: &input)
+        )
+      case .getMatrix:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getMatrix(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          subregion: MatrixSubregion(parsing: &input, repeats: false)
+        )
       case .getDynamicInfo:
         return try .getDynamicInfo(commands: _parseDynamicInfos(&input).map {
           try AemCommandPayload(commandTypeRaw: $0.commandTypeRaw, data: $0.data)
@@ -758,6 +918,44 @@ public enum AemResponsePayload: Sendable, Hashable {
   case getSamplingRateRange(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, samplingRateRange: UInt64)
   /// `pathLatency` is in nanoseconds.
   case getPathLatency(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, pathLatency: UInt32)
+  case setVideoFormat(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, videoFormat: VideoFormat)
+  case getVideoFormat(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, videoFormat: VideoFormat)
+  case setSensorFormat(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, sensorFormat: UInt64)
+  case getSensorFormat(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, sensorFormat: UInt64)
+  case getVideoMap(
+    descriptorType: DescriptorType,
+    descriptorIndex: DescriptorIndex,
+    mapIndex: UInt16,
+    numberOfMaps: UInt16,
+    mappings: [VideoMapping]
+  )
+  case addVideoMappings(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, mappings: [VideoMapping])
+  case removeVideoMappings(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, mappings: [VideoMapping])
+  case getSensorMap(
+    descriptorType: DescriptorType,
+    descriptorIndex: DescriptorIndex,
+    mapIndex: UInt16,
+    numberOfMaps: UInt16,
+    mappings: [SensorMapping]
+  )
+  case addSensorMappings(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, mappings: [SensorMapping])
+  case removeSensorMappings(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, mappings: [SensorMapping])
+  case setSignalSelector(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, source: SignalSource)
+  case getSignalSelector(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, source: SignalSource)
+  case setMixer(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, values: [UInt8])
+  case getMixer(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, values: [UInt8])
+  case setMatrix(
+    descriptorType: DescriptorType,
+    descriptorIndex: DescriptorIndex,
+    subregion: MatrixSubregion,
+    values: [UInt8]
+  )
+  case getMatrix(
+    descriptorType: DescriptorType,
+    descriptorIndex: DescriptorIndex,
+    subregion: MatrixSubregion,
+    values: [UInt8]
+  )
   case getDynamicInfo([DynamicInfo])
   /// A response without a dedicated model.
   case other(commandType: UInt16, data: [UInt8])
@@ -947,8 +1145,9 @@ public enum AemResponsePayload: Sendable, Hashable {
         let numberOfMaps = try UInt16(parsingBigEndian: &input)
         let numberOfMappings = try UInt16(parsingBigEndian: &input)
         _ = try UInt16(parsingBigEndian: &input) // reserved
-        try input.requireRemaining(numberOfMappings, of: AudioMapping.length)
-        let mappings = try (0..<numberOfMappings).map { _ in try AudioMapping(parsing: &input) }
+        let mappings = try _parseMappingArray(&input, count: numberOfMappings, length: AudioMapping.length) {
+          try AudioMapping(parsing: &$0)
+        }
         return .getAudioMap(
           descriptorType: descriptorType,
           descriptorIndex: descriptorIndex,
@@ -957,14 +1156,18 @@ public enum AemResponsePayload: Sendable, Hashable {
           mappings: mappings
         )
       case .addAudioMappings:
-        let (descriptorType, descriptorIndex, mappings) = try _parseAudioMappings(&input)
+        let (descriptorType, descriptorIndex, mappings) = try _parseMappings(&input, length: AudioMapping.length) {
+          try AudioMapping(parsing: &$0)
+        }
         return .addAudioMappings(
           descriptorType: descriptorType,
           descriptorIndex: descriptorIndex,
           mappings: mappings
         )
       case .removeAudioMappings:
-        let (descriptorType, descriptorIndex, mappings) = try _parseAudioMappings(&input)
+        let (descriptorType, descriptorIndex, mappings) = try _parseMappings(&input, length: AudioMapping.length) {
+          try AudioMapping(parsing: &$0)
+        }
         return .removeAudioMappings(
           descriptorType: descriptorType,
           descriptorIndex: descriptorIndex,
@@ -1056,6 +1259,77 @@ public enum AemResponsePayload: Sendable, Hashable {
           descriptorIndex: UInt16(parsingBigEndian: &input),
           pathLatency: UInt32(parsingBigEndian: &input)
         )
+      case .setVideoFormat, .getVideoFormat:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        let videoFormat = try VideoFormat(parsing: &input)
+        return commandTypeRaw == AemCommandType.setVideoFormat.rawValue
+          ? .setVideoFormat(descriptorType: descriptorType, descriptorIndex: descriptorIndex, videoFormat: videoFormat)
+          : .getVideoFormat(descriptorType: descriptorType, descriptorIndex: descriptorIndex, videoFormat: videoFormat)
+      case .setSensorFormat, .getSensorFormat:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        let sensorFormat = try UInt64(parsingBigEndian: &input)
+        return commandTypeRaw == AemCommandType.setSensorFormat.rawValue
+          ? .setSensorFormat(descriptorType: descriptorType, descriptorIndex: descriptorIndex, sensorFormat: sensorFormat)
+          : .getSensorFormat(descriptorType: descriptorType, descriptorIndex: descriptorIndex, sensorFormat: sensorFormat)
+      case .getVideoMap, .getSensorMap:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        let mapIndex = try UInt16(parsingBigEndian: &input)
+        let numberOfMaps = try UInt16(parsingBigEndian: &input)
+        let numberOfMappings = try UInt16(parsingBigEndian: &input)
+        _ = try UInt16(parsingBigEndian: &input) // reserved
+        if commandTypeRaw == AemCommandType.getVideoMap.rawValue {
+          return try .getVideoMap(
+            descriptorType: descriptorType,
+            descriptorIndex: descriptorIndex,
+            mapIndex: mapIndex,
+            numberOfMaps: numberOfMaps,
+            mappings: _parseMappingArray(&input, count: numberOfMappings, length: VideoMapping.length) {
+              try VideoMapping(parsing: &$0)
+            }
+          )
+        }
+        return try .getSensorMap(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          mapIndex: mapIndex,
+          numberOfMaps: numberOfMaps,
+          mappings: _parseMappingArray(&input, count: numberOfMappings, length: SensorMapping.length) {
+            try SensorMapping(parsing: &$0)
+          }
+        )
+      case .addVideoMappings, .removeVideoMappings:
+        let (descriptorType, descriptorIndex, mappings) = try _parseMappings(&input, length: VideoMapping.length) {
+          try VideoMapping(parsing: &$0)
+        }
+        return commandTypeRaw == AemCommandType.addVideoMappings.rawValue
+          ? .addVideoMappings(descriptorType: descriptorType, descriptorIndex: descriptorIndex, mappings: mappings)
+          : .removeVideoMappings(descriptorType: descriptorType, descriptorIndex: descriptorIndex, mappings: mappings)
+      case .addSensorMappings, .removeSensorMappings:
+        let (descriptorType, descriptorIndex, mappings) = try _parseMappings(&input, length: SensorMapping.length) {
+          try SensorMapping(parsing: &$0)
+        }
+        return commandTypeRaw == AemCommandType.addSensorMappings.rawValue
+          ? .addSensorMappings(descriptorType: descriptorType, descriptorIndex: descriptorIndex, mappings: mappings)
+          : .removeSensorMappings(descriptorType: descriptorType, descriptorIndex: descriptorIndex, mappings: mappings)
+      case .setSignalSelector, .getSignalSelector:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        let source = try _parseSignalSelector(&input)
+        return commandTypeRaw == AemCommandType.setSignalSelector.rawValue
+          ? .setSignalSelector(descriptorType: descriptorType, descriptorIndex: descriptorIndex, source: source)
+          : .getSignalSelector(descriptorType: descriptorType, descriptorIndex: descriptorIndex, source: source)
+      case .setMixer, .getMixer:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        let values = try [UInt8](parsingRemainingBytes: &input)
+        return commandTypeRaw == AemCommandType.setMixer.rawValue
+          ? .setMixer(descriptorType: descriptorType, descriptorIndex: descriptorIndex, values: values)
+          : .getMixer(descriptorType: descriptorType, descriptorIndex: descriptorIndex, values: values)
+      case .setMatrix, .getMatrix:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        let subregion = try MatrixSubregion(parsing: &input, repeats: commandTypeRaw == AemCommandType.setMatrix.rawValue ? nil : false)
+        let values = try [UInt8](parsingRemainingBytes: &input)
+        return commandTypeRaw == AemCommandType.setMatrix.rawValue
+          ? .setMatrix(descriptorType: descriptorType, descriptorIndex: descriptorIndex, subregion: subregion, values: values)
+          : .getMatrix(descriptorType: descriptorType, descriptorIndex: descriptorIndex, subregion: subregion, values: values)
       case .getDynamicInfo:
         return try .getDynamicInfo(_parseDynamicInfos(&input).map {
           DynamicInfo(commandTypeRaw: $0.commandTypeRaw, statusRaw: $0.statusRaw, data: $0.data)
@@ -1075,30 +1349,51 @@ private func _parseDescriptor(
   try (DescriptorType(parsing: &input), UInt16(parsingBigEndian: &input))
 }
 
-private func _parseAudioMappings(
-  _ input: inout ParserSpan
-) throws -> (DescriptorType, DescriptorIndex, [AudioMapping]) {
+/// descriptor_type, descriptor_index, number_of_mappings, reserved and the mappings of
+/// ADD/REMOVE_AUDIO_MAPPINGS, ADD/REMOVE_VIDEO_MAPPINGS and ADD/REMOVE_SENSOR_MAPPINGS (Figure 7-71).
+private func _parseMappings<Mapping>(
+  _ input: inout ParserSpan,
+  length: Int,
+  _ parse: (inout ParserSpan) throws -> Mapping
+) throws -> (DescriptorType, DescriptorIndex, [Mapping]) {
   let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
   let numberOfMappings = try UInt16(parsingBigEndian: &input)
   _ = try UInt16(parsingBigEndian: &input) // reserved
-  try input.requireRemaining(numberOfMappings, of: AudioMapping.length)
-  let mappings = try (0..<numberOfMappings).map { _ in try AudioMapping(parsing: &input) }
-  return (descriptorType, descriptorIndex, mappings)
+  return try (descriptorType, descriptorIndex, _parseMappingArray(&input, count: numberOfMappings, length: length, parse))
 }
 
-private func _serializeAudioMappings(
+private func _parseMappingArray<Mapping>(
+  _ input: inout ParserSpan,
+  count: UInt16,
+  length: Int,
+  _ parse: (inout ParserSpan) throws -> Mapping
+) throws -> [Mapping] {
+  try input.requireRemaining(count, of: length)
+  return try (0..<count).map { _ in try parse(&input) }
+}
+
+private func _serializeMappings<Mapping>(
   _ descriptorType: DescriptorType,
   _ descriptorIndex: DescriptorIndex,
-  _ mappings: [AudioMapping],
-  into context: inout SerializationContext
+  _ mappings: [Mapping],
+  into context: inout SerializationContext,
+  _ serialize: (Mapping, inout SerializationContext) throws -> Void
 ) throws {
+  guard mappings.count <= Int(UInt16.max) else { throw AvdeccCodecError.valueTooLarge }
   try context.serialize(descriptorType)
   context.serialize(uint16: descriptorIndex)
   context.serialize(uint16: UInt16(mappings.count))
   context.serialize(uint16: 0) // reserved
   for mapping in mappings {
-    try context.serialize(mapping)
+    try serialize(mapping, &context)
   }
+}
+
+/// signal_type, signal_index, signal_output and reserved of SET/GET_SIGNAL_SELECTOR (Figure 7-52).
+private func _parseSignalSelector(_ input: inout ParserSpan) throws -> SignalSource {
+  let source = try SignalSource(parsing: &input)
+  _ = try UInt16(parsingBigEndian: &input) // reserved
+  return source
 }
 
 /// One element of a GET_DYNAMIC_INFO response's dynamic_infos (IEEE 1722.1-2021 §7.4.76.1). An
@@ -1310,6 +1605,48 @@ extension StreamBackup {
       try context.serialize(talker.entityID)
       context.serialize(uint16: talker.streamIndex)
     }
+  }
+}
+
+extension VideoFormat {
+  init(parsing input: inout ParserSpan) throws {
+    formatSpecific = try UInt32(parsingBigEndian: &input)
+    aspectRatio = try UInt16(parsingBigEndian: &input)
+    colorSpace = try UInt16(parsingBigEndian: &input)
+    frameSize = try UInt32(parsingBigEndian: &input)
+  }
+
+  func serialize(into context: inout SerializationContext) {
+    context.serialize(uint32: formatSpecific)
+    context.serialize(uint16: aspectRatio)
+    context.serialize(uint16: colorSpace)
+    context.serialize(uint32: frameSize)
+  }
+}
+
+extension MatrixSubregion {
+  /// `repeats` overrides the rep bit, which GET_MATRIX reserves.
+  init(parsing input: inout ParserSpan, repeats: Bool? = nil) throws {
+    column = try UInt16(parsingBigEndian: &input)
+    row = try UInt16(parsingBigEndian: &input)
+    width = try UInt16(parsingBigEndian: &input)
+    height = try UInt16(parsingBigEndian: &input)
+    let bits = try UInt16(parsingBigEndian: &input)
+    self.repeats = repeats ?? (bits & 0x8000 != 0)
+    direction = MatrixDirection(rawValue: UInt8((bits >> 12) & 0x7))
+    valueCount = bits & 0x0FFF
+    itemOffset = try UInt16(parsingBigEndian: &input)
+  }
+
+  func serialize(into context: inout SerializationContext, repeats: Bool? = nil) throws {
+    guard direction.rawValue <= 0x7, valueCount <= 0x0FFF else { throw AvdeccCodecError.valueTooLarge }
+    context.serialize(uint16: column)
+    context.serialize(uint16: row)
+    context.serialize(uint16: width)
+    context.serialize(uint16: height)
+    let rep: UInt16 = (repeats ?? self.repeats) ? 0x8000 : 0
+    context.serialize(uint16: rep | UInt16(direction.rawValue) << 12 | valueCount)
+    context.serialize(uint16: itemOffset)
   }
 }
 

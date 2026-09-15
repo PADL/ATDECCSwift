@@ -1157,6 +1157,38 @@ public actor Controller<Port: NetworkPort> {
          let .getSamplingRateRange(descriptorType, descriptorIndex, samplingRateRange):
       guard descriptorType == .videoCluster else { break }
       _yield(.videoClusterSamplingRateRangeChanged(id, videoClusterIndex: descriptorIndex, samplingRateRange: samplingRateRange))
+    case let .setVideoFormat(descriptorType, descriptorIndex, videoFormat),
+         let .getVideoFormat(descriptorType, descriptorIndex, videoFormat):
+      guard descriptorType == .videoCluster else { break }
+      _yield(.videoClusterFormatChanged(id, videoClusterIndex: descriptorIndex, videoFormat: videoFormat))
+    case let .setSensorFormat(descriptorType, descriptorIndex, sensorFormat),
+         let .getSensorFormat(descriptorType, descriptorIndex, sensorFormat):
+      guard descriptorType == .sensorCluster else { break }
+      _yield(.sensorClusterFormatChanged(id, sensorClusterIndex: descriptorIndex, sensorFormat: sensorFormat))
+    case let .getVideoMap(descriptorType, descriptorIndex, _, _, mappings):
+      _yield(.streamPortVideoMappingsChanged(id, descriptorType: descriptorType.rawValue, streamPortIndex: descriptorIndex, mappings: mappings))
+    case let .addVideoMappings(descriptorType, descriptorIndex, mappings):
+      _yield(.streamPortVideoMappingsAdded(id, descriptorType: descriptorType.rawValue, streamPortIndex: descriptorIndex, mappings: mappings))
+    case let .removeVideoMappings(descriptorType, descriptorIndex, mappings):
+      _yield(.streamPortVideoMappingsRemoved(id, descriptorType: descriptorType.rawValue, streamPortIndex: descriptorIndex, mappings: mappings))
+    case let .getSensorMap(descriptorType, descriptorIndex, _, _, mappings):
+      _yield(.streamPortSensorMappingsChanged(id, descriptorType: descriptorType.rawValue, streamPortIndex: descriptorIndex, mappings: mappings))
+    case let .addSensorMappings(descriptorType, descriptorIndex, mappings):
+      _yield(.streamPortSensorMappingsAdded(id, descriptorType: descriptorType.rawValue, streamPortIndex: descriptorIndex, mappings: mappings))
+    case let .removeSensorMappings(descriptorType, descriptorIndex, mappings):
+      _yield(.streamPortSensorMappingsRemoved(id, descriptorType: descriptorType.rawValue, streamPortIndex: descriptorIndex, mappings: mappings))
+    case let .setSignalSelector(descriptorType, descriptorIndex, source),
+         let .getSignalSelector(descriptorType, descriptorIndex, source):
+      guard descriptorType == .signalSelector else { break }
+      _yield(.signalSelectorChanged(id, signalSelectorIndex: descriptorIndex, source: source))
+    case let .setMixer(descriptorType, descriptorIndex, values),
+         let .getMixer(descriptorType, descriptorIndex, values):
+      guard descriptorType == .mixer else { break }
+      _yield(.mixerValuesChanged(id, mixerIndex: descriptorIndex, packedValues: values))
+    case let .setMatrix(descriptorType, descriptorIndex, subregion, values),
+         let .getMatrix(descriptorType, descriptorIndex, subregion, values):
+      guard descriptorType == .matrix else { break }
+      _yield(.matrixValuesChanged(id, matrixIndex: descriptorIndex, subregion: subregion, packedValues: values))
     case let .reboot(descriptorType, descriptorIndex):
       _yield(.entityRebooting(id, descriptorType: descriptorType.rawValue, descriptorIndex: descriptorIndex))
     case .entityAvailable, .controllerAvailable, .readDescriptor, .registerUnsolicitedNotification,
@@ -1872,6 +1904,104 @@ public extension Controller {
     return pathLatency
   }
 
+  /// SET_VIDEO_FORMAT (IEEE 1722.1-2021 §7.4.11) on a VIDEO_CLUSTER.
+  @discardableResult
+  func setVideoFormat(
+    id targetEntityID: UniqueIdentifier, videoClusterIndex: UInt16, to videoFormat: VideoFormat
+  ) async throws -> VideoFormat {
+    guard case let .setVideoFormat(_, _, format) = try await _aem(targetEntityID, .setVideoFormat(
+      descriptorType: .videoCluster, descriptorIndex: videoClusterIndex, videoFormat: videoFormat
+    )) else { throw AemStatus.protocolError }
+    return format
+  }
+
+  func getVideoFormat(id targetEntityID: UniqueIdentifier, videoClusterIndex: UInt16) async throws -> VideoFormat {
+    guard case let .getVideoFormat(_, _, format) = try await _aem(targetEntityID, .getVideoFormat(
+      descriptorType: .videoCluster, descriptorIndex: videoClusterIndex
+    )) else { throw AemStatus.protocolError }
+    return format
+  }
+
+  /// SET_SENSOR_FORMAT (IEEE 1722.1-2021 §7.4.13) on a SENSOR_CLUSTER; `sensorFormat` is laid out
+  /// as in §7.3.12.
+  @discardableResult
+  func setSensorFormat(
+    id targetEntityID: UniqueIdentifier, sensorClusterIndex: UInt16, to sensorFormat: UInt64
+  ) async throws -> UInt64 {
+    guard case let .setSensorFormat(_, _, format) = try await _aem(targetEntityID, .setSensorFormat(
+      descriptorType: .sensorCluster, descriptorIndex: sensorClusterIndex, sensorFormat: sensorFormat
+    )) else { throw AemStatus.protocolError }
+    return format
+  }
+
+  func getSensorFormat(id targetEntityID: UniqueIdentifier, sensorClusterIndex: UInt16) async throws -> UInt64 {
+    guard case let .getSensorFormat(_, _, format) = try await _aem(targetEntityID, .getSensorFormat(
+      descriptorType: .sensorCluster, descriptorIndex: sensorClusterIndex
+    )) else { throw AemStatus.protocolError }
+    return format
+  }
+
+  // MARK: Signal processing
+
+  /// SET_SIGNAL_SELECTOR (IEEE 1722.1-2021 §7.4.29).
+  @discardableResult
+  func setSignalSelector(
+    id targetEntityID: UniqueIdentifier, signalSelectorIndex: UInt16, to source: SignalSource
+  ) async throws -> SignalSource {
+    guard case let .setSignalSelector(_, _, source) = try await _aem(targetEntityID, .setSignalSelector(
+      descriptorType: .signalSelector, descriptorIndex: signalSelectorIndex, source: source
+    )) else { throw AemStatus.protocolError }
+    return source
+  }
+
+  func getSignalSelector(id targetEntityID: UniqueIdentifier, signalSelectorIndex: UInt16) async throws -> SignalSource {
+    guard case let .getSignalSelector(_, _, source) = try await _aem(targetEntityID, .getSignalSelector(
+      descriptorType: .signalSelector, descriptorIndex: signalSelectorIndex
+    )) else { throw AemStatus.protocolError }
+    return source
+  }
+
+  /// SET_MIXER (IEEE 1722.1-2021 §7.4.31); `packedValues` is laid out as the MIXER descriptor's
+  /// control_value_type describes.
+  @discardableResult
+  func setMixer(
+    id targetEntityID: UniqueIdentifier, mixerIndex: UInt16, packedValues: [UInt8]
+  ) async throws -> [UInt8] {
+    guard case let .setMixer(_, _, values) = try await _aem(targetEntityID, .setMixer(
+      descriptorType: .mixer, descriptorIndex: mixerIndex, values: packedValues
+    )) else { throw AemStatus.protocolError }
+    return values
+  }
+
+  func getMixer(id targetEntityID: UniqueIdentifier, mixerIndex: UInt16) async throws -> [UInt8] {
+    guard case let .getMixer(_, _, values) = try await _aem(targetEntityID, .getMixer(
+      descriptorType: .mixer, descriptorIndex: mixerIndex
+    )) else { throw AemStatus.protocolError }
+    return values
+  }
+
+  /// SET_MATRIX (IEEE 1722.1-2021 §7.4.33); `packedValues` holds `subregion.valueCount` values laid
+  /// out as the MATRIX descriptor's control_value_type describes.
+  @discardableResult
+  func setMatrix(
+    id targetEntityID: UniqueIdentifier, matrixIndex: UInt16, subregion: MatrixSubregion, packedValues: [UInt8]
+  ) async throws -> (subregion: MatrixSubregion, packedValues: [UInt8]) {
+    guard case let .setMatrix(_, _, subregion, values) = try await _aem(targetEntityID, .setMatrix(
+      descriptorType: .matrix, descriptorIndex: matrixIndex, subregion: subregion, values: packedValues
+    )) else { throw AemStatus.protocolError }
+    return (subregion, values)
+  }
+
+  /// GET_MATRIX (IEEE 1722.1-2021 §7.4.34) of `subregion.valueCount` values.
+  func getMatrix(
+    id targetEntityID: UniqueIdentifier, matrixIndex: UInt16, subregion: MatrixSubregion
+  ) async throws -> (subregion: MatrixSubregion, packedValues: [UInt8]) {
+    guard case let .getMatrix(_, _, subregion, values) = try await _aem(targetEntityID, .getMatrix(
+      descriptorType: .matrix, descriptorIndex: matrixIndex, subregion: subregion
+    )) else { throw AemStatus.protocolError }
+    return (subregion, values)
+  }
+
   // MARK: Clocks
 
   func getClockSource(id targetEntityID: UniqueIdentifier, clockDomainIndex: UInt16) async throws -> UInt16 {
@@ -2306,11 +2436,12 @@ public extension Controller {
     try await _getAudioMap(targetEntityID, .streamPortOutput, streamPortIndex, mapIndex)
   }
 
-  /// ADD/REMOVE_AUDIO_MAPPINGS commands of at most 63 mappings, which fill a 524-octet AECPDU
-  /// (IEEE 1722.1-2021 §9.2.2.6); an empty list is still one command. Commands before a failing
-  /// one remain applied.
-  private func _audioMappingCommands(_ mappings: [AudioMapping]) -> [[AudioMapping]] {
-    let mappingsPerCommand = 63
+  /// ADD/REMOVE_*_MAPPINGS commands filling at most a 524-octet AECPDU (IEEE 1722.1-2021 §9.2.2.6):
+  /// 63 audio or video mappings, or 84 sensor mappings. An empty list is still one command.
+  /// Commands before a failing one remain applied.
+  private func _mappingCommands<Mapping>(_ mappings: [Mapping], length: Int) -> [[Mapping]] {
+    // controller_entity_id, sequence_id, command_type, then the descriptor, count and reserved
+    let mappingsPerCommand = (AecpMaximumControlDataLength - 12 - 8) / length
     guard !mappings.isEmpty else { return [[]] }
     return stride(from: 0, to: mappings.count, by: mappingsPerCommand).map {
       Array(mappings[$0..<min($0 + mappingsPerCommand, mappings.count)])
@@ -2321,7 +2452,7 @@ public extension Controller {
     _ id: UniqueIdentifier, _ type: DescriptorType, _ streamPortIndex: UInt16, _ mappings: [AudioMapping]
   ) async throws -> [AudioMapping] {
     var added = [AudioMapping]()
-    for command in _audioMappingCommands(mappings) {
+    for command in _mappingCommands(mappings, length: AudioMapping.length) {
       guard case let .addAudioMappings(_, _, mappings) = try await _aem(id, .addAudioMappings(
         descriptorType: type, descriptorIndex: streamPortIndex, mappings: command
       )) else { throw AemStatus.protocolError }
@@ -2334,7 +2465,7 @@ public extension Controller {
     _ id: UniqueIdentifier, _ type: DescriptorType, _ streamPortIndex: UInt16, _ mappings: [AudioMapping]
   ) async throws -> [AudioMapping] {
     var removed = [AudioMapping]()
-    for command in _audioMappingCommands(mappings) {
+    for command in _mappingCommands(mappings, length: AudioMapping.length) {
       guard case let .removeAudioMappings(_, _, mappings) = try await _aem(id, .removeAudioMappings(
         descriptorType: type, descriptorIndex: streamPortIndex, mappings: command
       )) else { throw AemStatus.protocolError }
@@ -2369,6 +2500,80 @@ public extension Controller {
     id targetEntityID: UniqueIdentifier, streamPortIndex: UInt16, mappings: [AudioMapping]
   ) async throws -> [AudioMapping] {
     try await _removeAudioMappings(targetEntityID, .streamPortOutput, streamPortIndex, mappings)
+  }
+
+  func getVideoMap(
+    id targetEntityID: UniqueIdentifier, descriptorType: DescriptorType, streamPortIndex: UInt16, mapIndex: UInt16
+  ) async throws -> (numberOfMaps: UInt16, mapIndex: UInt16, mappings: [VideoMapping]) {
+    guard case let .getVideoMap(_, _, mapIndex, numberOfMaps, mappings) = try await _aem(targetEntityID, .getVideoMap(
+      descriptorType: descriptorType, descriptorIndex: streamPortIndex, mapIndex: mapIndex
+    )) else { throw AemStatus.protocolError }
+    return (numberOfMaps, mapIndex, mappings)
+  }
+
+  @discardableResult
+  func addVideoMappings(
+    id targetEntityID: UniqueIdentifier, descriptorType: DescriptorType, streamPortIndex: UInt16, mappings: [VideoMapping]
+  ) async throws -> [VideoMapping] {
+    var added = [VideoMapping]()
+    for command in _mappingCommands(mappings, length: VideoMapping.length) {
+      guard case let .addVideoMappings(_, _, mappings) = try await _aem(targetEntityID, .addVideoMappings(
+        descriptorType: descriptorType, descriptorIndex: streamPortIndex, mappings: command
+      )) else { throw AemStatus.protocolError }
+      added += mappings
+    }
+    return added
+  }
+
+  @discardableResult
+  func removeVideoMappings(
+    id targetEntityID: UniqueIdentifier, descriptorType: DescriptorType, streamPortIndex: UInt16, mappings: [VideoMapping]
+  ) async throws -> [VideoMapping] {
+    var removed = [VideoMapping]()
+    for command in _mappingCommands(mappings, length: VideoMapping.length) {
+      guard case let .removeVideoMappings(_, _, mappings) = try await _aem(targetEntityID, .removeVideoMappings(
+        descriptorType: descriptorType, descriptorIndex: streamPortIndex, mappings: command
+      )) else { throw AemStatus.protocolError }
+      removed += mappings
+    }
+    return removed
+  }
+
+  func getSensorMap(
+    id targetEntityID: UniqueIdentifier, descriptorType: DescriptorType, streamPortIndex: UInt16, mapIndex: UInt16
+  ) async throws -> (numberOfMaps: UInt16, mapIndex: UInt16, mappings: [SensorMapping]) {
+    guard case let .getSensorMap(_, _, mapIndex, numberOfMaps, mappings) = try await _aem(targetEntityID, .getSensorMap(
+      descriptorType: descriptorType, descriptorIndex: streamPortIndex, mapIndex: mapIndex
+    )) else { throw AemStatus.protocolError }
+    return (numberOfMaps, mapIndex, mappings)
+  }
+
+  @discardableResult
+  func addSensorMappings(
+    id targetEntityID: UniqueIdentifier, descriptorType: DescriptorType, streamPortIndex: UInt16, mappings: [SensorMapping]
+  ) async throws -> [SensorMapping] {
+    var added = [SensorMapping]()
+    for command in _mappingCommands(mappings, length: SensorMapping.length) {
+      guard case let .addSensorMappings(_, _, mappings) = try await _aem(targetEntityID, .addSensorMappings(
+        descriptorType: descriptorType, descriptorIndex: streamPortIndex, mappings: command
+      )) else { throw AemStatus.protocolError }
+      added += mappings
+    }
+    return added
+  }
+
+  @discardableResult
+  func removeSensorMappings(
+    id targetEntityID: UniqueIdentifier, descriptorType: DescriptorType, streamPortIndex: UInt16, mappings: [SensorMapping]
+  ) async throws -> [SensorMapping] {
+    var removed = [SensorMapping]()
+    for command in _mappingCommands(mappings, length: SensorMapping.length) {
+      guard case let .removeSensorMappings(_, _, mappings) = try await _aem(targetEntityID, .removeSensorMappings(
+        descriptorType: descriptorType, descriptorIndex: streamPortIndex, mappings: command
+      )) else { throw AemStatus.protocolError }
+      removed += mappings
+    }
+    return removed
   }
 
   // MARK: Memory objects and operations

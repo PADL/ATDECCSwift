@@ -428,6 +428,126 @@ final class PayloadTests: XCTestCase {
     XCTAssertEqual(pathLatency, 1500)
   }
 
+  // Figures 7-36 and 7-38: format_specific, aspect_ratio, color_space, frame_size; an 8-octet sensor_format
+  func testVideoAndSensorFormatPayloads() throws {
+    let videoFormat = VideoFormat(formatSpecific: 0x0102_0304, aspectRatio: 0x1009, colorSpace: 2, frameSize: 0x0780_0438)
+    let setVideo = AemCommandPayload.setVideoFormat(descriptorType: .videoCluster, descriptorIndex: 1, videoFormat: videoFormat)
+    let videoBytes = try setVideo.serialized()
+    XCTAssertEqual(
+      videoBytes,
+      be16(DescriptorType.videoCluster.rawValue) + be16(1) + be32(0x0102_0304) + be16(0x1009) + be16(2) + be32(0x0780_0438)
+    )
+    XCTAssertEqual(try AemCommandPayload(commandTypeRaw: setVideo.commandTypeRaw, data: videoBytes), setVideo)
+    guard case .getVideoFormat(_, 1, videoFormat) =
+      try AemResponsePayload(commandTypeRaw: AemCommandType.getVideoFormat.rawValue, data: videoBytes)
+    else { return XCTFail("expected GET_VIDEO_FORMAT") }
+
+    let sensorBytes = be16(DescriptorType.sensorCluster.rawValue) + be16(0) + be64(0x0011_2233_4455_6677)
+    guard case .getSensorFormat(_, 0, 0x0011_2233_4455_6677) =
+      try AemResponsePayload(commandTypeRaw: AemCommandType.getSensorFormat.rawValue, data: sensorBytes)
+    else { return XCTFail("expected GET_SENSOR_FORMAT") }
+    let setSensor = AemCommandPayload.setSensorFormat(
+      descriptorType: .sensorCluster,
+      descriptorIndex: 0,
+      sensorFormat: 0x0011_2233_4455_6677
+    )
+    XCTAssertEqual(try setSensor.serialized(), sensorBytes)
+  }
+
+  // Figures 7-69 to 7-71: 8-octet video mappings and 6-octet sensor mappings
+  func testVideoAndSensorMapPayloads() throws {
+    let video = VideoMapping(streamIndex: 1, programStream: 2, elementaryStream: 3, clusterOffset: 4)
+    let getVideoMap = be16(DescriptorType.streamPortInput.rawValue) + be16(0) + be16(1) + be16(2) + be16(1) + be16(0) +
+      be16(1) + be16(2) + be16(3) + be16(4)
+    guard case let .getVideoMap(_, _, mapIndex, numberOfMaps, mappings) =
+      try AemResponsePayload(commandTypeRaw: AemCommandType.getVideoMap.rawValue, data: getVideoMap)
+    else { return XCTFail("expected GET_VIDEO_MAP") }
+    XCTAssertEqual(mapIndex, 1)
+    XCTAssertEqual(numberOfMaps, 2)
+    XCTAssertEqual(mappings, [video])
+    // number_of_mappings running past the payload is malformed
+    XCTAssertThrowsError(try AemResponsePayload(
+      commandTypeRaw: AemCommandType.getVideoMap.rawValue,
+      data: Array(getVideoMap.dropLast())
+    ))
+
+    let sensor = SensorMapping(streamIndex: 5, streamSignal: 6, clusterOffset: 7)
+    let addSensor = AemCommandPayload.addSensorMappings(
+      descriptorType: .streamPortOutput,
+      descriptorIndex: 2,
+      mappings: [sensor, sensor]
+    )
+    let sensorBytes = try addSensor.serialized()
+    XCTAssertEqual(
+      sensorBytes,
+      be16(DescriptorType.streamPortOutput.rawValue) + be16(2) + be16(2) + be16(0) +
+        be16(5) + be16(6) + be16(7) + be16(5) + be16(6) + be16(7)
+    )
+    XCTAssertEqual(try AemCommandPayload(commandTypeRaw: addSensor.commandTypeRaw, data: sensorBytes), addSensor)
+    guard case .removeSensorMappings(_, 2, [sensor, sensor]) =
+      try AemResponsePayload(commandTypeRaw: AemCommandType.removeSensorMappings.rawValue, data: sensorBytes)
+    else { return XCTFail("expected REMOVE_SENSOR_MAPPINGS") }
+
+    let getSensorMap = AemCommandPayload.getSensorMap(descriptorType: .streamPortInput, descriptorIndex: 0, mapIndex: 3)
+    XCTAssertEqual(try getSensorMap.serialized(), be16(DescriptorType.streamPortInput.rawValue) + be16(0) + be16(3) + be16(0))
+  }
+
+  // Figures 7-52 to 7-58: signal selector source and reserved; mixer values; matrix rep, direction, value_count
+  func testSignalSelectorMixerAndMatrixPayloads() throws {
+    let source = SignalSource(signalType: .audioCluster, signalIndex: 3, signalOutput: 1)
+    let setSelector = AemCommandPayload.setSignalSelector(descriptorType: .signalSelector, descriptorIndex: 0, source: source)
+    let selectorBytes = try setSelector.serialized()
+    XCTAssertEqual(
+      selectorBytes,
+      be16(DescriptorType.signalSelector.rawValue) + be16(0) + be16(DescriptorType.audioCluster.rawValue) + be16(3) +
+        be16(1) + be16(0)
+    )
+    XCTAssertEqual(try AemCommandPayload(commandTypeRaw: setSelector.commandTypeRaw, data: selectorBytes), setSelector)
+    guard case .getSignalSelector(_, 0, source) =
+      try AemResponsePayload(commandTypeRaw: AemCommandType.getSignalSelector.rawValue, data: selectorBytes)
+    else { return XCTFail("expected GET_SIGNAL_SELECTOR") }
+
+    let mixerBytes = be16(DescriptorType.mixer.rawValue) + be16(1) + be32(0x7F)
+    guard case .getMixer(_, 1, [0, 0, 0, 0x7F]) =
+      try AemResponsePayload(commandTypeRaw: AemCommandType.getMixer.rawValue, data: mixerBytes)
+    else { return XCTFail("expected GET_MIXER") }
+
+    let subregion = MatrixSubregion(
+      column: 1, row: 2, width: 3, height: 4, repeats: true, direction: .vertical, valueCount: 0xABC, itemOffset: 5
+    )
+    let setMatrix = AemCommandPayload.setMatrix(
+      descriptorType: .matrix,
+      descriptorIndex: 0,
+      subregion: subregion,
+      values: [1, 2]
+    )
+    let matrixBytes = try setMatrix.serialized()
+    let matrixHeader = be16(DescriptorType.matrix.rawValue) + be16(0) + be16(1) + be16(2) + be16(3) + be16(4)
+    XCTAssertEqual(matrixBytes, matrixHeader + be16(0x9ABC) + be16(5) + [1, 2])
+    XCTAssertEqual(try AemCommandPayload(commandTypeRaw: setMatrix.commandTypeRaw, data: matrixBytes), setMatrix)
+
+    // GET_MATRIX reserves the rep bit
+    let getMatrix = AemCommandPayload.getMatrix(descriptorType: .matrix, descriptorIndex: 0, subregion: subregion)
+    XCTAssertEqual(try getMatrix.serialized(), matrixHeader + be16(0x1ABC) + be16(5))
+    guard case let .getMatrix(_, _, parsed, values) = try AemResponsePayload(
+      commandTypeRaw: AemCommandType.getMatrix.rawValue,
+      data: matrixBytes
+    ) else { return XCTFail("expected GET_MATRIX") }
+    XCTAssertFalse(parsed.repeats)
+    XCTAssertEqual(parsed.direction, .vertical)
+    XCTAssertEqual(parsed.valueCount, 0xABC)
+    XCTAssertEqual(values, [1, 2])
+
+    var tooMany = subregion
+    tooMany.valueCount = 0x1000
+    XCTAssertThrowsError(try AemCommandPayload.setMatrix(
+      descriptorType: .matrix,
+      descriptorIndex: 0,
+      subregion: tooMany,
+      values: []
+    ).serialized())
+  }
+
   // Figure 7-32: WRITE_DESCRIPTOR carries a whole descriptor, as READ_DESCRIPTOR's response does
   func testWriteDescriptorPayload() throws {
     let block = be16(DescriptorType.controlBlock.rawValue) + be16(2) + fixedString("Block") + be16(0xFFFF) +

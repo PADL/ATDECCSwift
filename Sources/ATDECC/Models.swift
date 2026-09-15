@@ -88,6 +88,70 @@ public struct StreamBackup: Sendable, Hashable {
   }
 }
 
+/// A video cluster's format (SET_VIDEO_FORMAT and GET_VIDEO_FORMAT, IEEE 1722.1-2021 Figure 7-36),
+/// laid out as in §7.3.8 to §7.3.11.
+public struct VideoFormat: Sendable, Hashable {
+  public var formatSpecific: UInt32
+  public var aspectRatio: UInt16
+  public var colorSpace: UInt16
+  public var frameSize: UInt32
+
+  public init(formatSpecific: UInt32, aspectRatio: UInt16, colorSpace: UInt16, frameSize: UInt32) {
+    self.formatSpecific = formatSpecific
+    self.aspectRatio = aspectRatio
+    self.colorSpace = colorSpace
+    self.frameSize = frameSize
+  }
+}
+
+/// The direction matrix values fill a subregion in (IEEE 1722.1-2021 Table 7-146). Values 2 to 7
+/// are reserved.
+public struct MatrixDirection: RawRepresentable, Sendable, Hashable {
+  public let rawValue: UInt8
+
+  public init(rawValue: UInt8) {
+    self.rawValue = rawValue
+  }
+
+  public static let horizontal = MatrixDirection(rawValue: 0)
+  public static let vertical = MatrixDirection(rawValue: 1)
+}
+
+/// The matrix subregion SET_MATRIX and GET_MATRIX address (IEEE 1722.1-2021 Figures 7-56 to 7-58).
+/// `valueCount` is 12 bits and `direction` 3 bits; `repeats` is reserved in GET_MATRIX.
+public struct MatrixSubregion: Sendable, Hashable {
+  public var column: UInt16
+  public var row: UInt16
+  public var width: UInt16
+  public var height: UInt16
+  /// Fill the whole subregion by repeating the values.
+  public var repeats: Bool
+  public var direction: MatrixDirection
+  public var valueCount: UInt16
+  /// Items in `direction` to skip before the values apply.
+  public var itemOffset: UInt16
+
+  public init(
+    column: UInt16,
+    row: UInt16,
+    width: UInt16,
+    height: UInt16,
+    repeats: Bool = false,
+    direction: MatrixDirection = .horizontal,
+    valueCount: UInt16,
+    itemOffset: UInt16 = 0
+  ) {
+    self.column = column
+    self.row = row
+    self.width = width
+    self.height = height
+    self.repeats = repeats
+    self.direction = direction
+    self.valueCount = valueCount
+    self.itemOffset = itemOffset
+  }
+}
+
 /// One audio map entry, pairing a stream channel with a cluster channel
 /// (IEEE 1722.1-2021 §7.2.19.1).
 public struct AudioMapping: Sendable, Hashable {

@@ -70,6 +70,20 @@ public enum ControllerEvent: Sendable {
   case maxTransitTimeChanged(UniqueIdentifier, streamIndex: UInt16, maxTransitTime: UInt64)
   case streamBackupChanged(UniqueIdentifier, descriptorType: UInt16, descriptorIndex: UInt16, backup: StreamBackup)
   case videoClusterSamplingRateRangeChanged(UniqueIdentifier, videoClusterIndex: UInt16, samplingRateRange: UInt64)
+  case videoClusterFormatChanged(UniqueIdentifier, videoClusterIndex: UInt16, videoFormat: VideoFormat)
+  case sensorClusterFormatChanged(UniqueIdentifier, sensorClusterIndex: UInt16, sensorFormat: UInt64)
+  /// `descriptorType` is STREAM_PORT_INPUT or STREAM_PORT_OUTPUT.
+  case streamPortVideoMappingsChanged(UniqueIdentifier, descriptorType: UInt16, streamPortIndex: UInt16, mappings: [VideoMapping])
+  case streamPortVideoMappingsAdded(UniqueIdentifier, descriptorType: UInt16, streamPortIndex: UInt16, mappings: [VideoMapping])
+  case streamPortVideoMappingsRemoved(UniqueIdentifier, descriptorType: UInt16, streamPortIndex: UInt16, mappings: [VideoMapping])
+  case streamPortSensorMappingsChanged(UniqueIdentifier, descriptorType: UInt16, streamPortIndex: UInt16, mappings: [SensorMapping])
+  case streamPortSensorMappingsAdded(UniqueIdentifier, descriptorType: UInt16, streamPortIndex: UInt16, mappings: [SensorMapping])
+  case streamPortSensorMappingsRemoved(UniqueIdentifier, descriptorType: UInt16, streamPortIndex: UInt16, mappings: [SensorMapping])
+  case signalSelectorChanged(UniqueIdentifier, signalSelectorIndex: UInt16, source: SignalSource)
+  /// `packedValues` is laid out as the MIXER descriptor's control_value_type describes.
+  case mixerValuesChanged(UniqueIdentifier, mixerIndex: UInt16, packedValues: [UInt8])
+  /// `packedValues` is laid out as the MATRIX descriptor's control_value_type describes.
+  case matrixValuesChanged(UniqueIdentifier, matrixIndex: UInt16, subregion: MatrixSubregion, packedValues: [UInt8])
   /// A descriptor another controller wrote (IEEE 1722.1-2021 §7.4.6).
   case descriptorWritten(UniqueIdentifier, configurationIndex: UInt16, descriptorIndex: UInt16, descriptor: Descriptor)
 
@@ -160,6 +174,13 @@ public extension ControllerEvent {
          let .streamInputStopped(id, _), let .streamOutputStopped(id, _),
          let .maxTransitTimeChanged(id, _, _), let .streamBackupChanged(id, _, _, _),
          let .videoClusterSamplingRateRangeChanged(id, _, _), let .descriptorWritten(id, _, _, _):
+      id
+    case let .videoClusterFormatChanged(id, _, _), let .sensorClusterFormatChanged(id, _, _),
+         let .streamPortVideoMappingsChanged(id, _, _, _), let .streamPortVideoMappingsAdded(id, _, _, _),
+         let .streamPortVideoMappingsRemoved(id, _, _, _), let .streamPortSensorMappingsChanged(id, _, _, _),
+         let .streamPortSensorMappingsAdded(id, _, _, _), let .streamPortSensorMappingsRemoved(id, _, _, _),
+         let .signalSelectorChanged(id, _, _), let .mixerValuesChanged(id, _, _),
+         let .matrixValuesChanged(id, _, _, _):
       id
     case let .entityNameChanged(id, _), let .entityGroupNameChanged(id, _),
          let .descriptorNameChanged(id, _, _, _, _):

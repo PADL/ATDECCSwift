@@ -479,6 +479,41 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  // 504 octets of mappings per AECPDU: 63 video mappings of 8 octets, 84 sensor mappings of 6
+  func testVideoAndSensorMappingsAreSplitAcrossCommands() async throws {
+    let controller = try await makeController()
+    let video = (0..<UInt16(64)).map {
+      VideoMapping(streamIndex: 0, programStream: $0, elementaryStream: 0, clusterOffset: $0)
+    }
+    let addedVideo = try await controller.addVideoMappings(
+      id: entityID,
+      descriptorType: .streamPortInput,
+      streamPortIndex: 0,
+      mappings: video
+    )
+    XCTAssertEqual(addedVideo, video)
+    let sensor = (0..<UInt16(85)).map { SensorMapping(streamIndex: 0, streamSignal: $0, clusterOffset: $0) }
+    let removedSensor = try await controller.removeSensorMappings(
+      id: entityID,
+      descriptorType: .streamPortOutput,
+      streamPortIndex: 0,
+      mappings: sensor
+    )
+    XCTAssertEqual(removedSensor, sensor)
+    let counts = entity.received.withLock { received in
+      received.compactMap { pdu -> Int? in
+        guard case let .aecp(.aem(aem)) = pdu, !aem.isResponse else { return nil }
+        switch aem.commandType {
+        case .addVideoMappings: return (aem.commandSpecificData.count - 8) / VideoMapping.length
+        case .removeSensorMappings: return (aem.commandSpecificData.count - 8) / SensorMapping.length
+        default: return nil
+        }
+      }
+    }
+    XCTAssertEqual(counts, [63, 1, 84, 1])
+    await controller.close()
+  }
+
   func testCommandToUnknownEntity() async throws {
     let controller = try await makeController()
     do {
@@ -748,6 +783,39 @@ final class ControllerTests: XCTestCase {
       }
     }
     XCTAssertNotNil(changed)
+    await controller.close()
+  }
+
+  func testUnsolicitedSignalSelectorAndMatrix() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    try await entity.sendUnsolicited(
+      .setSignalSelector,
+      data: be16(DescriptorType.signalSelector.rawValue) + be16(2) + be16(DescriptorType.audioCluster.rawValue) +
+        be16(3) + be16(0) + be16(0)
+    )
+    let selected = await first(events) {
+      if case .signalSelectorChanged(entityID, signalSelectorIndex: 2, source: let source) = $0 {
+        source.signalType == .audioCluster && source.signalIndex == 3
+      } else {
+        false
+      }
+    }
+    XCTAssertNotNil(selected)
+
+    try await entity.sendUnsolicited(
+      .setMatrix,
+      data: be16(DescriptorType.matrix.rawValue) + be16(0) + be16(0) + be16(0) + be16(2) + be16(1) + be16(0x0002) +
+        be16(0) + [0x7F, 0x00]
+    )
+    let matrix = await first(events) {
+      if case .matrixValuesChanged(entityID, matrixIndex: 0, subregion: let subregion, packedValues: [0x7F, 0x00]) = $0 {
+        subregion.width == 2 && subregion.valueCount == 2 && subregion.direction == .horizontal
+      } else {
+        false
+      }
+    }
+    XCTAssertNotNil(matrix)
     await controller.close()
   }
 
