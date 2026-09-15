@@ -39,6 +39,13 @@ public struct EntityCapabilities: OptionSet, Sendable, Hashable {
   public static let aemInterfaceIndexValid = EntityCapabilities(rawValue: 1 << 15)
   public static let generalControllerIgnore = EntityCapabilities(rawValue: 1 << 16)
   public static let entityNotReady = EntityCapabilities(rawValue: 1 << 17)
+  public static let acmpAcquireWithAem = EntityCapabilities(rawValue: 1 << 18)
+  public static let acmpAuthenticateWithAem = EntityCapabilities(rawValue: 1 << 19)
+  public static let supportsUdpV4Atdecc = EntityCapabilities(rawValue: 1 << 20)
+  public static let supportsUdpV4Streaming = EntityCapabilities(rawValue: 1 << 21)
+  public static let supportsUdpV6Atdecc = EntityCapabilities(rawValue: 1 << 22)
+  public static let supportsUdpV6Streaming = EntityCapabilities(rawValue: 1 << 23)
+  public static let multiplePtpInstances = EntityCapabilities(rawValue: 1 << 24)
   public static let aemConfigurationIndexValid = EntityCapabilities(rawValue: 1 << 25)
 }
 
@@ -120,6 +127,17 @@ public struct LockEntityFlags: OptionSet, Sendable, Hashable {
   public static let unlock = LockEntityFlags(rawValue: 0x0000_0001)
 }
 
+/// ENTITY_AVAILABLE response flags (IEEE 1722.1-2021 Table 7-144).
+public struct EntityAvailableFlags: OptionSet, Sendable, Hashable {
+  public let rawValue: UInt32
+  public init(rawValue: UInt32) { self.rawValue = rawValue }
+
+  public static let entityAcquired = EntityAvailableFlags(rawValue: 1 << 0)
+  public static let entityLocked = EntityAvailableFlags(rawValue: 1 << 1)
+  public static let subentityAcquired = EntityAvailableFlags(rawValue: 1 << 2)
+  public static let subentityLocked = EntityAvailableFlags(rawValue: 1 << 3)
+}
+
 /// REGISTER_UNSOLICITED_NOTIFICATION flags (IEEE 1722.1-2021 Table 7-147).
 public struct RegisterUnsolicitedNotificationFlags: OptionSet, Sendable, Hashable {
   public let rawValue: UInt32
@@ -160,6 +178,11 @@ public struct StreamInfoFlags: OptionSet, Sendable, Hashable {
   public static let ipFlagsValid = StreamInfoFlags(rawValue: 1 << 19)
   public static let ipSrcPortValid = StreamInfoFlags(rawValue: 1 << 20)
   public static let ipDstPortValid = StreamInfoFlags(rawValue: 1 << 21)
+  public static let ipSrcAddrValid = StreamInfoFlags(rawValue: 1 << 22)
+  public static let ipDstAddrValid = StreamInfoFlags(rawValue: 1 << 23)
+  /// Not `noSrp`: a Listener registering no Talker attribute yet, or a Talker whose
+  /// declaration has no matching Listener attribute.
+  public static let notRegisteringSrp = StreamInfoFlags(rawValue: 1 << 24)
   public static let streamVlanIDValid = StreamInfoFlags(rawValue: 1 << 25)
   public static let connected = StreamInfoFlags(rawValue: 1 << 26)
   public static let msrpFailureValid = StreamInfoFlags(rawValue: 1 << 27)

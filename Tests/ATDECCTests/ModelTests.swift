@@ -137,6 +137,18 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(flags.rawValue, 0b0000_0111)
   }
 
+  // IEEE 1722.1-2021 numbers these bits MSB-first: bit N is 1 << (31 - N)
+  func testFlagsAddedIn2021WireValues() {
+    XCTAssertEqual(EntityCapabilities.acmpAcquireWithAem.rawValue, 0x0004_0000) // bit 13
+    XCTAssertEqual(EntityCapabilities.multiplePtpInstances.rawValue, 0x0100_0000) // bit 7
+    XCTAssertEqual(StreamInfoFlags.noSrp.rawValue, 0x0000_0100) // bit 23
+    XCTAssertEqual(StreamInfoFlags.ipSrcAddrValid.rawValue, 0x0040_0000) // bit 9
+    XCTAssertEqual(StreamInfoFlags.ipDstAddrValid.rawValue, 0x0080_0000) // bit 8
+    XCTAssertEqual(StreamInfoFlags.notRegisteringSrp.rawValue, 0x0100_0000) // bit 7
+    XCTAssertEqual(EntityAvailableFlags.entityAcquired.rawValue, 0x0000_0001) // bit 31
+    XCTAssertEqual(EntityAvailableFlags.subentityLocked.rawValue, 0x0000_0008) // bit 28
+  }
+
   func testAudioMappingEquality() {
     let a = AudioMapping(streamIndex: 0, streamChannel: 1, clusterOffset: 2, clusterChannel: 3)
     let b = AudioMapping(streamIndex: 0, streamChannel: 1, clusterOffset: 2, clusterChannel: 3)
