@@ -402,6 +402,21 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  // MVU commands are numbered apart from AEM commands (Milan 1.3 §5.4.3.2)
+  func testMvuSequenceIDsAreIndependentOfAem() async throws {
+    let controller = try await makeController()
+    _ = try await controller.readEntityDescriptor(id: entityID)
+    _ = try await controller.readEntityDescriptor(id: entityID)
+    let command = Task { try await controller.getMilanInfo(id: entityID) }
+    let sent = await entity.firstReceived {
+      if case let .aecp(.mvu(mvu)) = $0 { !mvu.isResponse } else { false }
+    }
+    command.cancel()
+    guard case let .aecp(.mvu(mvu)) = sent else { return XCTFail("no MVU command sent") }
+    XCTAssertEqual(mvu.sequenceID, 0)
+    await controller.close()
+  }
+
   func testCommandToUnknownEntity() async throws {
     let controller = try await makeController()
     do {

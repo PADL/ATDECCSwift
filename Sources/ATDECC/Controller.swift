@@ -133,8 +133,27 @@ private extension Duration {
 ///
 /// Unlike la_avdecc, ACMP commands are neither queued nor paced.
 public actor Controller<Port: NetworkPort> {
-  private struct AecpTransaction: Sendable {
+  /// AEM and MVU commands are numbered independently (Milan 1.3 §5.4.3.2), so a transaction is
+  /// identified by both.
+  private struct AecpTransactionID: Hashable, Sendable, CustomStringConvertible {
+    let isMvu: Bool
     let sequenceID: UInt16
+
+    init(isMvu: Bool, sequenceID: UInt16) {
+      self.isMvu = isMvu
+      self.sequenceID = sequenceID
+    }
+
+    init(_ aecpdu: Aecpdu) {
+      if case .mvu = aecpdu { isMvu = true } else { isMvu = false }
+      sequenceID = aecpdu.sequenceID
+    }
+
+    var description: String { "\(isMvu ? "MVU" : "AEM") #\(sequenceID)" }
+  }
+
+  private struct AecpTransaction: Sendable {
+    let id: AecpTransactionID
     let aecpdu: Aecpdu
     let destination: EUI48
     let promise: Promise<Aecpdu>
@@ -197,6 +216,7 @@ public actor Controller<Port: NetworkPort> {
   private var _lastDiscovery = ContinuousClock.now
   private var _maintenanceTask: Task<(), Never>?
   private var _aecpSequenceID = UInt16(0)
+  private var _mvuSequenceID = UInt16(0)
   private var _acmpSequenceID = UInt16(0)
   private var _aecpTargets = [UniqueIdentifier: AecpTarget]()
   private var _acmpTransactions = [UInt16: AcmpTransaction]()
@@ -247,7 +267,7 @@ public actor Controller<Port: NetworkPort> {
           } catch {
             await self?._completeAecpCommand(
               transaction.aecpdu.targetEntityID,
-              sequenceID: transaction.sequenceID,
+              transaction.id,
               with: .failure(CommandError.networkError(error))
             )
           }
@@ -655,6 +675,7 @@ public actor Controller<Port: NetworkPort> {
 
   private func _sendAecpCommand(
     to targetEntityID: UniqueIdentifier,
+    isMvu: Bool,
     _ makeAecpdu: (UInt16) -> Aecpdu
   ) async throws -> Aecpdu {
     guard !_isClosed else { throw CommandError.closed }
@@ -662,15 +683,21 @@ public actor Controller<Port: NetworkPort> {
       throw CommandError.unknownEntity
     }
 
-    let sequenceID = _aecpSequenceID
-    _aecpSequenceID &+= 1
+    let id: AecpTransactionID
+    if isMvu {
+      id = AecpTransactionID(isMvu: true, sequenceID: _mvuSequenceID)
+      _mvuSequenceID &+= 1
+    } else {
+      id = AecpTransactionID(isMvu: false, sequenceID: _aecpSequenceID)
+      _aecpSequenceID &+= 1
+    }
     let promise = Promise<Aecpdu>()
-    let timer = Timer(label: "AECP \(targetEntityID) #\(sequenceID)") { [weak self] in
-      await self?._aecpCommandTimedOut(targetEntityID, sequenceID: sequenceID)
+    let timer = Timer(label: "AECP \(targetEntityID) \(id)") { [weak self] in
+      await self?._aecpCommandTimedOut(targetEntityID, id)
     }
     _aecpTargets[targetEntityID, default: AecpTarget()].queued.append(AecpTransaction(
-      sequenceID: sequenceID,
-      aecpdu: makeAecpdu(sequenceID),
+      id: id,
+      aecpdu: makeAecpdu(id.sequenceID),
       destination: macAddress,
       promise: promise,
       timer: timer
@@ -682,7 +709,7 @@ public actor Controller<Port: NetworkPort> {
     } onCancel: { [weak self] in
       promise.resolve(.failure(CancellationError()))
       // stop retrying it, and free its place in flight
-      Task { await self?._cancelAecpCommand(targetEntityID, sequenceID: sequenceID) }
+      Task { await self?._cancelAecpCommand(targetEntityID, id) }
     }
   }
 
@@ -712,30 +739,30 @@ public actor Controller<Port: NetworkPort> {
     // it may have been answered or cancelled during the send
     guard !transaction.promise.isResolved,
           var target = _aecpTargets[targetEntityID],
-          let index = target.inflight.firstIndex(where: { $0.sequenceID == transaction.sequenceID })
+          let index = target.inflight.firstIndex(where: { $0.id == transaction.id })
     else { return }
     target.inflight[index].sendTime = .now
     _aecpTargets[targetEntityID] = target
     transaction.timer.start(interval: _timing.aecpCommandTimeout)
   }
 
-  private func _cancelAecpCommand(_ targetEntityID: UniqueIdentifier, sequenceID: UInt16) {
+  private func _cancelAecpCommand(_ targetEntityID: UniqueIdentifier, _ id: AecpTransactionID) {
     guard var target = _aecpTargets[targetEntityID] else { return }
-    if let index = target.queued.firstIndex(where: { $0.sequenceID == sequenceID }) {
+    if let index = target.queued.firstIndex(where: { $0.id == id }) {
       target.queued.remove(at: index)
       _aecpTargets[targetEntityID] = target.inflight.isEmpty && target.queued.isEmpty ? nil : target
     } else {
-      _completeAecpCommand(targetEntityID, sequenceID: sequenceID, with: .failure(CancellationError()))
+      _completeAecpCommand(targetEntityID, id, with: .failure(CancellationError()))
     }
   }
 
   private func _completeAecpCommand(
     _ targetEntityID: UniqueIdentifier,
-    sequenceID: UInt16,
+    _ id: AecpTransactionID,
     with result: Result<Aecpdu, any Error>
   ) {
     guard var target = _aecpTargets[targetEntityID],
-          let index = target.inflight.firstIndex(where: { $0.sequenceID == sequenceID })
+          let index = target.inflight.firstIndex(where: { $0.id == id })
     else { return }
     let transaction = target.inflight.remove(at: index)
     _aecpTargets[targetEntityID] = target
@@ -744,22 +771,22 @@ public actor Controller<Port: NetworkPort> {
     _transmit(_dequeueAecpCommands(targetEntityID))
   }
 
-  private func _aecpCommandTimedOut(_ targetEntityID: UniqueIdentifier, sequenceID: UInt16) {
+  private func _aecpCommandTimedOut(_ targetEntityID: UniqueIdentifier, _ id: AecpTransactionID) {
     guard var target = _aecpTargets[targetEntityID],
-          let index = target.inflight.firstIndex(where: { $0.sequenceID == sequenceID }),
+          let index = target.inflight.firstIndex(where: { $0.id == id }),
           // a timer restarted since it fired, by IN_PROGRESS or a retry, supersedes this expiry
           !target.inflight[index].timer.isRunning
     else { return }
 
     // a command cancelled since is not retried; the cancellation completes it
     guard !target.inflight[index].promise.isResolved else {
-      _completeAecpCommand(targetEntityID, sequenceID: sequenceID, with: .failure(CancellationError()))
+      _completeAecpCommand(targetEntityID, id, with: .failure(CancellationError()))
       return
     }
 
     guard !target.inflight[index].retried else {
       _yield(.aecpTimeout(targetEntityID))
-      _completeAecpCommand(targetEntityID, sequenceID: sequenceID, with: .failure(CommandError.timedOut))
+      _completeAecpCommand(targetEntityID, id, with: .failure(CommandError.timedOut))
       return
     }
 
@@ -839,21 +866,21 @@ public actor Controller<Port: NetworkPort> {
     from sourceMacAddress: EUI48
   ) {
     let targetEntityID = aecpdu.targetEntityID
-    let sequenceID = aecpdu.sequenceID
+    let id = AecpTransactionID(aecpdu)
     guard let transaction = _aecpTargets[targetEntityID]?.inflight
-      .first(where: { $0.sequenceID == sequenceID })
+      .first(where: { $0.id == id })
     else {
       _yield(.aecpUnexpectedResponse(targetEntityID))
       return
     }
     guard _isEqualMacAddress(transaction.destination, sourceMacAddress) else {
-      _logger.debug("\(entityID): ignoring response #\(sequenceID) for \(targetEntityID) from \(_macAddressToString(sourceMacAddress))")
+      _logger.debug("\(entityID): ignoring response \(id) for \(targetEntityID) from \(_macAddressToString(sourceMacAddress))")
       return
     }
     guard !inProgress else {
       // response times are measured from the last IN_PROGRESS, as la_avdecc does
       if var target = _aecpTargets[targetEntityID],
-         let index = target.inflight.firstIndex(where: { $0.sequenceID == sequenceID })
+         let index = target.inflight.firstIndex(where: { $0.id == id })
       {
         target.inflight[index].sendTime = .now
         _aecpTargets[targetEntityID] = target
@@ -862,7 +889,7 @@ public actor Controller<Port: NetworkPort> {
       return
     }
     let responseTime = ContinuousClock.now - transaction.sendTime
-    _completeAecpCommand(targetEntityID, sequenceID: sequenceID, with: .success(aecpdu))
+    _completeAecpCommand(targetEntityID, id, with: .success(aecpdu))
     _yield(.aecpResponseTime(targetEntityID, responseTime: responseTime.wholeMilliseconds))
   }
 
@@ -880,7 +907,7 @@ public actor Controller<Port: NetworkPort> {
 
     let response: Aecpdu
     do {
-      response = try await _sendAecpCommand(to: targetEntityID) { sequenceID in
+      response = try await _sendAecpCommand(to: targetEntityID, isMvu: false) { sequenceID in
         var aem = AemAecpdu(
           isResponse: false,
           targetEntityID: targetEntityID,
@@ -923,7 +950,7 @@ public actor Controller<Port: NetworkPort> {
 
     let response: Aecpdu
     do {
-      response = try await _sendAecpCommand(to: targetEntityID) { sequenceID in
+      response = try await _sendAecpCommand(to: targetEntityID, isMvu: true) { sequenceID in
         var mvu = MvuAecpdu(
           isResponse: false,
           targetEntityID: targetEntityID,
