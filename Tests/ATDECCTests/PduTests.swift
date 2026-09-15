@@ -184,6 +184,15 @@ final class PduTests: XCTestCase {
 }
 
 extension PduTests {
+  // IEEE 1722.1-2021 Table 7-140 after GET_MAX_TRANSIT_TIME, with 0x005A reserved
+  func testAemCommandTypesAfterMaxTransitTime() {
+    XCTAssertEqual(AemCommandType(rawValue: 0x004E), .setSamplingRateRange)
+    XCTAssertEqual(AemCommandType(rawValue: 0x0059), .getPtpPortInitialIntervals)
+    XCTAssertNil(AemCommandType(rawValue: 0x005A))
+    XCTAssertEqual(AemCommandType(rawValue: 0x005B), .getPtpPortCurrentIntervals)
+    XCTAssertEqual(AemCommandType(rawValue: 0x0068), .authAddKeyNonce)
+  }
+
   func testAemControllerRequestFlag() throws {
     var aem = AemAecpdu(
       isResponse: true,

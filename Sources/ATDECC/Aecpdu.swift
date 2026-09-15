@@ -115,6 +115,33 @@ public enum AemCommandType: UInt16, Sendable, CaseIterable {
   case getDynamicInfo = 0x004B
   case setMaxTransitTime = 0x004C
   case getMaxTransitTime = 0x004D
+  case setSamplingRateRange = 0x004E
+  case getSamplingRateRange = 0x004F
+  case setPtpInstanceInfo = 0x0050
+  case getPtpInstanceInfo = 0x0051
+  case getPtpInstanceExtendedInfo = 0x0052
+  case getPtpInstanceGrandmasterInfo = 0x0053
+  case getPtpInstancePathCount = 0x0054
+  case getPtpInstancePathTrace = 0x0055
+  case getPtpInstancePerfMonCount = 0x0056
+  case getPtpInstancePerfMonRecord = 0x0057
+  case setPtpPortInitialIntervals = 0x0058
+  case getPtpPortInitialIntervals = 0x0059
+  // 0x005A is reserved (IEEE 1722.1-2021 Table 7-140)
+  case getPtpPortCurrentIntervals = 0x005B
+  case setPtpPortRemoteIntervals = 0x005C
+  case getPtpPortRemoteIntervals = 0x005D
+  case setPtpPortInfo = 0x005E
+  case getPtpPortInfo = 0x005F
+  case setPtpPortOverrides = 0x0060
+  case getPtpPortOverrides = 0x0061
+  case getPtpPortPdelayMonCount = 0x0062
+  case getPtpPortPdelayMonRecord = 0x0063
+  case getPtpPortPerfMonCount = 0x0064
+  case getPtpPortPerfMonRecord = 0x0065
+  case getPathLatency = 0x0066
+  case authGetNonce = 0x0067
+  case authAddKeyNonce = 0x0068
   case expansion = 0x3FFF
   case invalidCommandType = 0xFFFF
 }
