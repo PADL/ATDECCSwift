@@ -114,6 +114,11 @@ public struct StreamFormat: CustomStringConvertible, Equatable, Hashable, Sendab
     UInt8((_format >> 24) & 0xFF)
   }
 
+  private var iec61883_6_ut: Bool {
+    guard iec61883_sf == .iec61883, iec61883_fmt == .fmt_6 else { return false }
+    return iec61883_6_b_nb_ut_sc_rsvd & 0x20 != 0
+  }
+
   private var iec61883_6_iec_60958_cnt: UInt8 {
     UInt8((_format >> 16) & 0xFF)
   }
@@ -240,6 +245,11 @@ public struct StreamFormat: CustomStringConvertible, Equatable, Hashable, Sendab
     AafNominalSampleRate(rawValue: UInt8((_format >> 48) & 0xF))
   }
 
+  // ut precedes nsr (IEEE 1722-2016 §I.2.4)
+  private var aafUt: Bool {
+    (_format >> 52) & 0x1 != 0
+  }
+
   private var aafChannelsPerFrame: Int? {
     // TODO: support AES3
     guard !aafIsAES3Format else { return nil }
@@ -250,6 +260,30 @@ public struct StreamFormat: CustomStringConvertible, Equatable, Hashable, Sendab
     // TODO: support AES3
     guard !aafIsAES3Format else { return nil }
     return Int(_format >> 12 & 0x3FF)
+  }
+
+  // CRF (IEEE 1722-2016 §I.2.6): type, timestamp_interval, timestamps_per_pdu, pull and a 29-bit
+  // base_frequency, which §10.4 sizes and Figure I.19's field list misstates as 12 bits
+
+  public var crfType: UInt8? {
+    subtype == .crf ? UInt8((_format >> 52) & 0xF) : nil
+  }
+
+  public var crfTimestampInterval: UInt16? {
+    subtype == .crf ? UInt16((_format >> 40) & 0xFFF) : nil
+  }
+
+  public var crfTimestampsPerPdu: UInt8? {
+    subtype == .crf ? UInt8((_format >> 32) & 0xFF) : nil
+  }
+
+  /// The multiplier of `crfBaseFrequency` (IEEE 1722-2016 Table 27); 0 is 1.0.
+  public var crfPull: UInt8? {
+    subtype == .crf ? UInt8((_format >> 29) & 0x7) : nil
+  }
+
+  public var crfBaseFrequency: UInt32? {
+    subtype == .crf ? UInt32(_format & 0x1FFF_FFFF) : nil
   }
 
   // AVTP common
@@ -271,8 +305,25 @@ public struct StreamFormat: CustomStringConvertible, Equatable, Hashable, Sendab
         return nil
       }
       return nsr.sampleRate
+    case .crf:
+      // a pull other than 1.0 gives a rate that is not a whole number of hertz
+      guard crfPull == 0, let baseFrequency = crfBaseFrequency else { return nil }
+      return Int(baseFrequency)
     default:
       return nil
+    }
+  }
+
+  /// Whether the format also describes every smaller channel count (the ut field, IEEE
+  /// 1722-2016 §I.2.2 and §I.2.4).
+  public var isUpToChannelsCount: Bool {
+    switch subtype {
+    case .iec61883iidc:
+      iec61883_6_ut
+    case .aaf:
+      aafUt
+    default:
+      false
     }
   }
 

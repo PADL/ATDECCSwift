@@ -49,6 +49,31 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(format.channelsPerFrame, 2)
   }
 
+  // ut is 0x10 in the second octet, as in la_avdecc's streamFormat_tests
+  func testAafUpToChannelsCount() {
+    let upTo = StreamFormat(format: 0x0215_0410_0804_0000)
+    XCTAssertTrue(upTo.isUpToChannelsCount)
+    XCTAssertEqual(upTo.channelsPerFrame, 32)
+    XCTAssertFalse(StreamFormat(format: 0x0205_0410_0804_0000).isUpToChannelsCount)
+  }
+
+  // Milan's 48 kHz CRF format: audio-sample type, 96 samples per timestamp, one per PDU
+  func testCrfFormat() {
+    let format = StreamFormat(format: 0x0410_6001_0000_BB80)
+    XCTAssertEqual(format.subtype, .crf)
+    XCTAssertEqual(format.crfType, 1)
+    XCTAssertEqual(format.crfTimestampInterval, 96)
+    XCTAssertEqual(format.crfTimestampsPerPdu, 1)
+    XCTAssertEqual(format.crfPull, 0)
+    XCTAssertEqual(format.crfBaseFrequency, 48000)
+    XCTAssertEqual(format.sampleRate, 48000)
+    XCTAssertNil(format.channelsPerFrame)
+    XCTAssertFalse(format.isUpToChannelsCount)
+    // pulled 1/1.001: not a whole number of hertz
+    XCTAssertNil(StreamFormat(format: 0x0410_6001_2000_BB80).sampleRate)
+    XCTAssertNil(StreamFormat(format: 0x0205_0220_0200_6000).crfBaseFrequency)
+  }
+
   func testAafReservedFormat() {
     // format is an octet: 0x11 and 0x12 are reserved, not FLOAT_32BIT and INT_32BIT
     let reservedFloat = StreamFormat(format: 0x0205_1120_0040_6000)
