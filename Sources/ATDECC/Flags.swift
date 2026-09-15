@@ -356,6 +356,45 @@ public struct StreamOutputCounterValidFlagsMilan12: OptionSet, Sendable, Hashabl
   public static let framesTx = StreamOutputCounterValidFlagsMilan12(rawValue: 1 << 4)
 }
 
+/// Valid-counter flags for PTP_PORT GET_COUNTERS (IEEE 1722.1-2021 Table 7-160).
+public struct PtpPortCounterValidFlags: OptionSet, Sendable, Hashable {
+  public let rawValue: UInt32
+  public init(rawValue: UInt32) { self.rawValue = rawValue }
+
+  public static let rxSync = PtpPortCounterValidFlags(rawValue: 1 << 0)
+  public static let rxOneStepSync = PtpPortCounterValidFlags(rawValue: 1 << 1)
+  public static let rxFollowUp = PtpPortCounterValidFlags(rawValue: 1 << 2)
+  public static let rxPdelayRequest = PtpPortCounterValidFlags(rawValue: 1 << 3)
+  public static let rxPdelayResponse = PtpPortCounterValidFlags(rawValue: 1 << 4)
+  public static let rxPdelayResponseFollowUp = PtpPortCounterValidFlags(rawValue: 1 << 5)
+  public static let rxAnnounce = PtpPortCounterValidFlags(rawValue: 1 << 6)
+  public static let rxSignal = PtpPortCounterValidFlags(rawValue: 1 << 7)
+  public static let rxPacketDiscard = PtpPortCounterValidFlags(rawValue: 1 << 8)
+  public static let rxDelayRequest = PtpPortCounterValidFlags(rawValue: 1 << 9)
+  public static let rxDelayResponse = PtpPortCounterValidFlags(rawValue: 1 << 10)
+  public static let syncReceiptTimeout = PtpPortCounterValidFlags(rawValue: 1 << 11)
+  public static let announceReceiptTimeout = PtpPortCounterValidFlags(rawValue: 1 << 12)
+  public static let pdelayAllowedExceeded = PtpPortCounterValidFlags(rawValue: 1 << 13)
+  public static let txSync = PtpPortCounterValidFlags(rawValue: 1 << 14)
+  public static let txOneStepSync = PtpPortCounterValidFlags(rawValue: 1 << 15)
+  public static let txFollowUp = PtpPortCounterValidFlags(rawValue: 1 << 16)
+  public static let txPdelayRequest = PtpPortCounterValidFlags(rawValue: 1 << 17)
+  public static let txPdelayResponse = PtpPortCounterValidFlags(rawValue: 1 << 18)
+  public static let txPdelayResponseFollowUp = PtpPortCounterValidFlags(rawValue: 1 << 19)
+  public static let txAnnounce = PtpPortCounterValidFlags(rawValue: 1 << 20)
+  public static let txSignal = PtpPortCounterValidFlags(rawValue: 1 << 21)
+  public static let txDelayRequest = PtpPortCounterValidFlags(rawValue: 1 << 22)
+  public static let txDelayResponse = PtpPortCounterValidFlags(rawValue: 1 << 23)
+  public static let entitySpecific8 = PtpPortCounterValidFlags(rawValue: 1 << 24)
+  public static let entitySpecific7 = PtpPortCounterValidFlags(rawValue: 1 << 25)
+  public static let entitySpecific6 = PtpPortCounterValidFlags(rawValue: 1 << 26)
+  public static let entitySpecific5 = PtpPortCounterValidFlags(rawValue: 1 << 27)
+  public static let entitySpecific4 = PtpPortCounterValidFlags(rawValue: 1 << 28)
+  public static let entitySpecific3 = PtpPortCounterValidFlags(rawValue: 1 << 29)
+  public static let entitySpecific2 = PtpPortCounterValidFlags(rawValue: 1 << 30)
+  public static let entitySpecific1 = PtpPortCounterValidFlags(rawValue: 1 << 31)
+}
+
 // MARK: - Milan
 
 /// Milan protocol features (Milan 1.3 §5.4.4.1, MILAN_INFO features_flags).

@@ -90,6 +90,7 @@ public enum ControllerEvent: Sendable {
   case clockDomainCountersChanged(UniqueIdentifier, clockDomainIndex: UInt16, valid: ClockDomainCounterValidFlags, counters: DescriptorCounters)
   case streamInputCountersChanged(UniqueIdentifier, streamIndex: UInt16, valid: StreamInputCounterValidFlags, counters: DescriptorCounters)
   case streamOutputCountersChanged(UniqueIdentifier, streamIndex: UInt16, valid: StreamOutputCounterValidFlags, counters: DescriptorCounters)
+  case ptpPortCountersChanged(UniqueIdentifier, ptpPortIndex: UInt16, valid: PtpPortCounterValidFlags, counters: DescriptorCounters)
   case avbInfoChanged(UniqueIdentifier, avbInterfaceIndex: UInt16, info: AvbInfo)
   case asPathChanged(UniqueIdentifier, avbInterfaceIndex: UInt16, asPath: [UniqueIdentifier])
 
@@ -163,7 +164,8 @@ public extension ControllerEvent {
       id
     case let .entityCountersChanged(id, _, _), let .avbInterfaceCountersChanged(id, _, _, _),
          let .clockDomainCountersChanged(id, _, _, _), let .streamInputCountersChanged(id, _, _, _),
-         let .streamOutputCountersChanged(id, _, _, _), let .avbInfoChanged(id, _, _),
+         let .streamOutputCountersChanged(id, _, _, _), let .ptpPortCountersChanged(id, _, _, _),
+         let .avbInfoChanged(id, _, _),
          let .asPathChanged(id, _, _):
       id
     case let .controlValuesChanged(id, _, _), let .memoryObjectLengthChanged(id, _, _, _),

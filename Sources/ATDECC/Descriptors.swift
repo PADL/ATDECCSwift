@@ -90,6 +90,47 @@ public struct PortFlags: OptionSet, Sendable, Hashable {
   public static let syncSampleRateConv = PortFlags(rawValue: 1 << 2)
 }
 
+/// PTP_INSTANCE flags (IEEE 1722.1-2021 Table 7-66).
+public struct PtpInstanceFlags: OptionSet, Sendable, Hashable {
+  public let rawValue: UInt32
+  public init(rawValue: UInt32) { self.rawValue = rawValue }
+
+  public static let canSetInstanceEnable = PtpInstanceFlags(rawValue: 1 << 0)
+  public static let canSetPriority1 = PtpInstanceFlags(rawValue: 1 << 1)
+  public static let canSetPriority2 = PtpInstanceFlags(rawValue: 1 << 2)
+  public static let canSetDomainNumber = PtpInstanceFlags(rawValue: 1 << 3)
+  public static let canSetExternalPortConfiguration = PtpInstanceFlags(rawValue: 1 << 4)
+  public static let canSetSlaveOnly = PtpInstanceFlags(rawValue: 1 << 5)
+  public static let canEnablePerformance = PtpInstanceFlags(rawValue: 1 << 6)
+  public static let performanceMonitoring = PtpInstanceFlags(rawValue: 1 << 30)
+  public static let grandmasterCapable = PtpInstanceFlags(rawValue: 1 << 31)
+}
+
+/// PTP_PORT flags (IEEE 1722.1-2021 Table 7-69, which misnumbers CAN_OVERRIDE_COMPUTE_LINK_DELAY
+/// as bit 29; it lies between bits 21 and 19).
+public struct PtpPortFlags: OptionSet, Sendable, Hashable {
+  public let rawValue: UInt32
+  public init(rawValue: UInt32) { self.rawValue = rawValue }
+
+  public static let canSetEnable = PtpPortFlags(rawValue: 1 << 0)
+  public static let canSetLinkDelayThreshold = PtpPortFlags(rawValue: 1 << 1)
+  public static let canSetDelayMechanism = PtpPortFlags(rawValue: 1 << 2)
+  public static let canSetDelayAsymmetry = PtpPortFlags(rawValue: 1 << 3)
+  public static let canSetInitialMessageIntervals = PtpPortFlags(rawValue: 1 << 4)
+  public static let canSetTimeouts = PtpPortFlags(rawValue: 1 << 5)
+  public static let canOverrideAnnounceInterval = PtpPortFlags(rawValue: 1 << 6)
+  public static let canOverrideSyncInterval = PtpPortFlags(rawValue: 1 << 7)
+  public static let canOverridePdelayInterval = PtpPortFlags(rawValue: 1 << 8)
+  public static let canOverrideGptpCapableInterval = PtpPortFlags(rawValue: 1 << 9)
+  public static let canOverrideComputeNeighbor = PtpPortFlags(rawValue: 1 << 10)
+  public static let canOverrideComputeLinkDelay = PtpPortFlags(rawValue: 1 << 11)
+  public static let canOverrideOnestep = PtpPortFlags(rawValue: 1 << 12)
+  public static let supportsRemoteIntervalSignal = PtpPortFlags(rawValue: 1 << 28)
+  public static let supportsOnestepTransmit = PtpPortFlags(rawValue: 1 << 29)
+  public static let supportsOnestepReceive = PtpPortFlags(rawValue: 1 << 30)
+  public static let supportsUnicastNegotiate = PtpPortFlags(rawValue: 1 << 31)
+}
+
 // MARK: - Descriptors
 
 /// ENTITY descriptor (IEEE 1722.1-2021 §7.2.1).
@@ -1139,7 +1180,7 @@ public struct PtpInstanceDescriptor: Sendable, Hashable, CustomStringConvertible
   public var objectName: String
   public var localizedDescription: LocalizedStringReference
   public var clockIdentity: UniqueIdentifier
-  public var flags: UInt32
+  public var flags: PtpInstanceFlags
   public var numberOfControls: UInt16
   public var baseControl: UInt16
   public var numberOfPtpPorts: UInt16
@@ -1150,7 +1191,7 @@ public struct PtpInstanceDescriptor: Sendable, Hashable, CustomStringConvertible
     objectName = try String(parsingAvdeccFixedString: &input)
     localizedDescription = try LocalizedStringReference(parsing: &input)
     clockIdentity = try UniqueIdentifier(parsing: &input)
-    flags = try UInt32(parsingBigEndian: &input)
+    flags = try PtpInstanceFlags(rawValue: UInt32(parsingBigEndian: &input))
     numberOfControls = try UInt16(parsingBigEndian: &input)
     baseControl = try UInt16(parsingBigEndian: &input)
     numberOfPtpPorts = try UInt16(parsingBigEndian: &input)
@@ -1161,7 +1202,7 @@ public struct PtpInstanceDescriptor: Sendable, Hashable, CustomStringConvertible
     context.serialize(avdeccFixedString: objectName)
     try context.serialize(localizedDescription)
     try context.serialize(clockIdentity)
-    context.serialize(uint32: flags)
+    context.serialize(uint32: flags.rawValue)
     context.serialize(uint16: numberOfControls)
     context.serialize(uint16: baseControl)
     context.serialize(uint16: numberOfPtpPorts)
@@ -1183,7 +1224,7 @@ public struct PtpPortDescriptor: Sendable, Hashable, CustomStringConvertible {
   public var localizedDescription: LocalizedStringReference
   public var portNumber: UInt16
   public var portType: UInt16
-  public var flags: UInt32
+  public var flags: PtpPortFlags
   public var avbInterfaceIndex: UInt16
   /// The six-octet PTP profileIdentifier.
   public var profileIdentifier: EUI48
@@ -1194,7 +1235,7 @@ public struct PtpPortDescriptor: Sendable, Hashable, CustomStringConvertible {
     localizedDescription = try LocalizedStringReference(parsing: &input)
     portNumber = try UInt16(parsingBigEndian: &input)
     portType = try UInt16(parsingBigEndian: &input)
-    flags = try UInt32(parsingBigEndian: &input)
+    flags = try PtpPortFlags(rawValue: UInt32(parsingBigEndian: &input))
     avbInterfaceIndex = try UInt16(parsingBigEndian: &input)
     profileIdentifier = try _eui48(parsing: &input)
   }
@@ -1204,7 +1245,7 @@ public struct PtpPortDescriptor: Sendable, Hashable, CustomStringConvertible {
     try context.serialize(localizedDescription)
     context.serialize(uint16: portNumber)
     context.serialize(uint16: portType)
-    context.serialize(uint32: flags)
+    context.serialize(uint32: flags.rawValue)
     context.serialize(uint16: avbInterfaceIndex)
     context.serialize(eui48: profileIdentifier)
   }

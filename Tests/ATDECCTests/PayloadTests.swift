@@ -414,6 +414,24 @@ final class PayloadTests: XCTestCase {
     )
   }
 
+  // IEEE 1722.1-2021 Tables 7-66, 7-69 and 7-160, numbered MSB-first
+  func testPtpFlagsWireValues() {
+    XCTAssertEqual(PtpInstanceFlags.canSetInstanceEnable.rawValue, 0x0000_0001)
+    XCTAssertEqual(PtpInstanceFlags.grandmasterCapable.rawValue, 0x8000_0000)
+    XCTAssertEqual(PtpPortFlags.canOverrideComputeLinkDelay.rawValue, 0x0000_0800) // bit 20
+    XCTAssertEqual(PtpPortFlags.canOverrideOnestep.rawValue, 0x0000_1000) // bit 19
+    XCTAssertEqual(PtpPortFlags.supportsUnicastNegotiate.rawValue, 0x8000_0000)
+    XCTAssertEqual(PtpPortCounterValidFlags.txDelayResponse.rawValue, 0x0080_0000) // bit 8
+    XCTAssertEqual(PtpPortCounterValidFlags.entitySpecific1.rawValue, 0x8000_0000)
+  }
+
+  // AECP status is five bits (Table 7-141); a reserved code is kept as received
+  func testReservedAemStatusIsKept() {
+    XCTAssertEqual(AemStatus(20).rawValue, 20)
+    XCTAssertEqual(AemStatus(31).rawValue, 31)
+    XCTAssertEqual(AemStatus(200), .internalError)
+  }
+
   func testCounterValidFlagsWireValues() {
     // Milan 1.3 Table 5.14: signal presence counters
     XCTAssertEqual(StreamOutputCounterValidFlags.entitySpecific9.rawValue, 0x0080_0000)
@@ -678,6 +696,7 @@ extension PayloadTests {
   func testPtpPortDescriptorComparesEveryField() throws {
     // object_name, localized_description, port_number, port_type, flags, avb_interface_index,
     // profile_identifier
+    // flags: CAN_SET_ENABLE and CAN_SET_LINK_DELAY_THRESHOLD (bits 31 and 30)
     let body = fixedString("PTP 1") + be16(0xFFFF) + be16(1) + be16(2) + be32(3) + be16(0) +
       [0x00, 0x80, 0xC2, 0x00, 0x01, 0x00]
     let bytes = be16(DescriptorType.ptpPort.rawValue) + be16(0) + body
@@ -685,6 +704,7 @@ extension PayloadTests {
       return XCTFail("expected PTP_PORT")
     }
     XCTAssertEqual(UInt64(eui48: descriptor.profileIdentifier), 0x0080_C200_0100)
+    XCTAssertEqual(descriptor.flags, [.canSetEnable, .canSetLinkDelayThreshold])
     var context = SerializationContext()
     try Descriptor.ptpPort(descriptor).serialize(descriptorIndex: 0, into: &context)
     XCTAssertEqual(context.bytes, bytes)
@@ -694,7 +714,7 @@ extension PayloadTests {
       ("localizedDescription", { $0.localizedDescription = LocalizedStringReference(rawValue: 0) }),
       ("portNumber", { $0.portNumber = 0 }),
       ("portType", { $0.portType = 0 }),
-      ("flags", { $0.flags = 0 }),
+      ("flags", { $0.flags = [] }),
       ("avbInterfaceIndex", { $0.avbInterfaceIndex = 1 }),
       ("profileIdentifier", { $0.profileIdentifier[5] = 1 }),
     ]

@@ -33,15 +33,35 @@ public enum AemStatus: UInt16, Error {
   case entityMisbehaving = 10
   case notSupported = 11
   case streamIsRunning = 12
+  // every five-bit status code has a case, so that a status from an entity is never lost
+  case reserved13 = 13
+  case reserved14 = 14
+  case reserved15 = 15
+  case reserved16 = 16
+  case reserved17 = 17
+  case reserved18 = 18
+  case reserved19 = 19
+  case reserved20 = 20
+  case reserved21 = 21
+  case reserved22 = 22
+  case reserved23 = 23
+  case reserved24 = 24
+  case reserved25 = 25
+  case reserved26 = 26
+  case reserved27 = 27
+  case reserved28 = 28
+  case reserved29 = 29
+  case reserved30 = 30
+  case reserved31 = 31
   case networkError = 995
   case protocolError = 996
   case timedOut = 997
   case unknownEntity = 998
   case internalError = 999
 
-  /// Lossy init: unknown `raw` values collapse to `.internalError` so callers always get a
-  /// usable error rather than nil. Use `init(rawValue:)` to distinguish "unknown value" from
-  /// the catch-all internal-error case.
+  /// Lossy init: values that are neither a status code nor a library code collapse to
+  /// `.internalError` so callers always get a usable error rather than nil. Use
+  /// `init(rawValue:)` to distinguish "unknown value" from the catch-all internal-error case.
   public init(_ raw: UInt16) {
     self = Self(rawValue: raw) ?? .internalError
   }

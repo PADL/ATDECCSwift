@@ -480,6 +480,19 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  // a reserved status from the entity reaches the caller as received
+  func testReservedAemStatusIsPreserved() async throws {
+    let controller = try await makeController()
+    entity.behaviour.withLock { $0.status = .reserved20 }
+    do {
+      _ = try await controller.readEntityDescriptor(id: entityID)
+      XCTFail("expected a reserved status")
+    } catch let status as AemStatus {
+      XCTAssertEqual(status.rawValue, 20)
+    }
+    await controller.close()
+  }
+
   func testRetryAfterTimeout() async throws {
     let controller = try await makeController()
     let events = await controller.events()
@@ -675,6 +688,22 @@ final class ControllerTests: XCTestCase {
       XCTAssertEqual(status, .badArguments)
     }
     XCTAssertEqual(entity.receivedCount(where: isCommand(.getDynamicInfo)), 0)
+    await controller.close()
+  }
+
+  func testUnsolicitedPtpPortCounters() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    var data = be16(DescriptorType.ptpPort.rawValue) + be16(1)
+    data += be32(PtpPortCounterValidFlags.rxSync.rawValue)
+    for counter in 0..<UInt32(DescriptorCounters.count) {
+      data += be32(counter)
+    }
+    try await entity.sendUnsolicited(.getCounters, data: data)
+    let changed = await first(events) {
+      if case .ptpPortCountersChanged(entityID, ptpPortIndex: 1, valid: .rxSync, counters: _) = $0 { true } else { false }
+    }
+    XCTAssertNotNil(changed)
     await controller.close()
   }
 

@@ -1107,6 +1107,8 @@ public actor Controller<Port: NetworkPort> {
         _yield(.streamInputCountersChanged(id, streamIndex: descriptorIndex, valid: StreamInputCounterValidFlags(rawValue: countersValid), counters: counters))
       case .streamOutput:
         _yield(.streamOutputCountersChanged(id, streamIndex: descriptorIndex, valid: StreamOutputCounterValidFlags(rawValue: countersValid), counters: counters))
+      case .ptpPort:
+        _yield(.ptpPortCountersChanged(id, ptpPortIndex: descriptorIndex, valid: PtpPortCounterValidFlags(rawValue: countersValid), counters: counters))
       default:
         break
       }
