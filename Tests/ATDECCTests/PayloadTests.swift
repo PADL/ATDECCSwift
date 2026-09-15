@@ -262,13 +262,17 @@ final class PayloadTests: XCTestCase {
       streamInfo: StreamInfo(
         msrpAccumulatedLatency: 1000,
         streamVlanID: 2,
-        streamInfoFlags: [.streamVlanIDValid, .connected, .registeringFailed, .msrpFailureValid],
+        streamInfoFlags: [
+          .streamVlanIDValid, .noSrp, .encryptedPdu, .connected, .registeringFailed, .msrpFailureValid,
+          .savedState, .streamingWait,
+        ],
         msrpFailureCode: 4,
         msrpFailureBridgeID: 5
       )
     )
     let bytes = try command.serialized()
-    XCTAssertEqual(Array(bytes[4..<8]), [0x02, 0x00, 0x00, 0x00]) // STREAM_VLAN_ID_VALID only
+    // STREAM_VLAN_ID_VALID, NO_SRP and ENCRYPTED_PDU
+    XCTAssertEqual(Array(bytes[4..<8]), [0x02, 0x00, 0x01, 0x20])
     guard case let .setStreamInfo(_, _, info) =
       try AemCommandPayload(commandTypeRaw: command.commandTypeRaw, data: bytes)
     else { return XCTFail("not a SET_STREAM_INFO") }

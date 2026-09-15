@@ -994,9 +994,12 @@ extension StreamInfo {
     }
   }
 
-  /// The flags a SET_STREAM_INFO command can carry; the rest report state in a response.
+  /// The flags a SET_STREAM_INFO command carries: the ACMP flags of the lower 16 bits apart from
+  /// SAVED_STATE and STREAMING_WAIT, which are not settable (IEEE 1722.1-2021 §7.4.15.1), and
+  /// TALKER_FAILED, which reports state; and the flags marking a field of the 1722.1-2013 layout.
   static let commandFlags: StreamInfoFlags = [
-    .classB, .streamVlanIDValid, .streamDestMacValid, .msrpAccLatValid, .streamIDValid, .streamFormatValid,
+    .classB, .fastConnect, .supportsEncrypted, .encryptedPdu, .noSrp,
+    .streamVlanIDValid, .streamDestMacValid, .msrpAccLatValid, .streamIDValid, .streamFormatValid,
   ]
 
   /// Serializes the SET_STREAM_INFO fields following descriptor_type and descriptor_index,
