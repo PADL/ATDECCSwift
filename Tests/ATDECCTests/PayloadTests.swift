@@ -476,6 +476,24 @@ final class PayloadTests: XCTestCase {
     )
   }
 
+  // IEEE 1722.1-2021 Tables 7-12, 7-19, 7-28, 7-64, 7-68 and 7-121, and control_value_type's
+  // read only and unknown flags (§7.3.6.1)
+  func testDescriptorValueTypes() {
+    XCTAssertEqual(JackType.pps.rawValue, 0x0025)
+    XCTAssertEqual(JackType(rawValue: 0x1234).rawValue, 0x1234) // undefined values are kept
+    XCTAssertEqual(MemoryObjectType.daeGeneric.rawValue, 0x000E)
+    XCTAssertEqual(AudioClusterFormat.smpte.rawValue, 0x88)
+    XCTAssertEqual(TimingAlgorithm.combined.rawValue, 0x0002)
+    XCTAssertEqual(PtpPortType.e2eUnicastUdpV6.rawValue, 0x000B)
+
+    let valueType = ControlValueType(rawValue: 0x8014)
+    XCTAssertTrue(valueType.isReadOnly)
+    XCTAssertFalse(valueType.isValueUnknown)
+    XCTAssertEqual(valueType.kind, .selectorString)
+    XCTAssertEqual(ControlValueType(.gptpTime, isValueUnknown: true).rawValue, 0x4023)
+    XCTAssertEqual(ControlValueType.Kind.vendor.rawValue, 0x3FFE)
+  }
+
   // IEEE 1722.1-2021 Tables 7-66, 7-69 and 7-160, numbered MSB-first
   func testPtpFlagsWireValues() {
     XCTAssertEqual(PtpInstanceFlags.canSetInstanceEnable.rawValue, 0x0000_0001)
@@ -822,7 +840,7 @@ extension PayloadTests {
       ("objectName", { $0.objectName = "" }),
       ("localizedDescription", { $0.localizedDescription = LocalizedStringReference(rawValue: 0) }),
       ("portNumber", { $0.portNumber = 0 }),
-      ("portType", { $0.portType = 0 }),
+      ("portType", { $0.portType = .p2pLinkLayer }),
       ("flags", { $0.flags = [] }),
       ("avbInterfaceIndex", { $0.avbInterfaceIndex = 1 }),
       ("profileIdentifier", { $0.profileIdentifier[5] = 1 }),

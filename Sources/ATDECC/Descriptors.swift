@@ -131,6 +131,178 @@ public struct PtpPortFlags: OptionSet, Sendable, Hashable {
   public static let supportsUnicastNegotiate = PtpPortFlags(rawValue: 1 << 31)
 }
 
+// MARK: - Descriptor value types
+
+// These keep values their tables do not define, as DescriptorType does.
+
+/// JACK_INPUT / JACK_OUTPUT jack_type (IEEE 1722.1-2021 Table 7-12).
+public struct JackType: RawRepresentable, Sendable, Hashable {
+  public let rawValue: UInt16
+  public init(rawValue: UInt16) { self.rawValue = rawValue }
+
+  public static let speaker = JackType(rawValue: 0x0000)
+  public static let headphone = JackType(rawValue: 0x0001)
+  public static let analogMicrophone = JackType(rawValue: 0x0002)
+  public static let spdif = JackType(rawValue: 0x0003)
+  public static let adat = JackType(rawValue: 0x0004)
+  public static let tdif = JackType(rawValue: 0x0005)
+  public static let madi = JackType(rawValue: 0x0006)
+  public static let unbalancedAnalog = JackType(rawValue: 0x0007)
+  public static let balancedAnalog = JackType(rawValue: 0x0008)
+  public static let digital = JackType(rawValue: 0x0009)
+  public static let midi = JackType(rawValue: 0x000A)
+  public static let aesEbu = JackType(rawValue: 0x000B)
+  public static let compositeVideo = JackType(rawValue: 0x000C)
+  public static let sVhsVideo = JackType(rawValue: 0x000D)
+  public static let componentVideo = JackType(rawValue: 0x000E)
+  public static let dvi = JackType(rawValue: 0x000F)
+  public static let hdmi = JackType(rawValue: 0x0010)
+  public static let udi = JackType(rawValue: 0x0011)
+  public static let displayPort = JackType(rawValue: 0x0012)
+  public static let antenna = JackType(rawValue: 0x0013)
+  public static let analogTuner = JackType(rawValue: 0x0014)
+  public static let ethernet = JackType(rawValue: 0x0015)
+  public static let wifi = JackType(rawValue: 0x0016)
+  public static let usb = JackType(rawValue: 0x0017)
+  public static let pci = JackType(rawValue: 0x0018)
+  public static let pciE = JackType(rawValue: 0x0019)
+  public static let scsi = JackType(rawValue: 0x001A)
+  public static let ata = JackType(rawValue: 0x001B)
+  public static let imager = JackType(rawValue: 0x001C)
+  public static let ir = JackType(rawValue: 0x001D)
+  public static let thunderbolt = JackType(rawValue: 0x001E)
+  public static let sata = JackType(rawValue: 0x001F)
+  public static let smpteLtc = JackType(rawValue: 0x0020)
+  public static let digitalMicrophone = JackType(rawValue: 0x0021)
+  public static let audioMediaClock = JackType(rawValue: 0x0022)
+  public static let videoMediaClock = JackType(rawValue: 0x0023)
+  public static let gnssClock = JackType(rawValue: 0x0024)
+  public static let pps = JackType(rawValue: 0x0025)
+  public static let expansion = JackType(rawValue: 0xFFFF)
+}
+
+/// MEMORY_OBJECT memory_object_type (IEEE 1722.1-2021 Table 7-19).
+public struct MemoryObjectType: RawRepresentable, Sendable, Hashable {
+  public let rawValue: UInt16
+  public init(rawValue: UInt16) { self.rawValue = rawValue }
+
+  public static let firmwareImage = MemoryObjectType(rawValue: 0x0000)
+  public static let vendorSpecific = MemoryObjectType(rawValue: 0x0001)
+  public static let crashDump = MemoryObjectType(rawValue: 0x0002)
+  public static let logObject = MemoryObjectType(rawValue: 0x0003)
+  public static let autostartSettings = MemoryObjectType(rawValue: 0x0004)
+  public static let snapshotSettings = MemoryObjectType(rawValue: 0x0005)
+  public static let svgManufacturer = MemoryObjectType(rawValue: 0x0006)
+  public static let svgEntity = MemoryObjectType(rawValue: 0x0007)
+  public static let svgGeneric = MemoryObjectType(rawValue: 0x0008)
+  public static let pngManufacturer = MemoryObjectType(rawValue: 0x0009)
+  public static let pngEntity = MemoryObjectType(rawValue: 0x000A)
+  public static let pngGeneric = MemoryObjectType(rawValue: 0x000B)
+  public static let daeManufacturer = MemoryObjectType(rawValue: 0x000C)
+  public static let daeEntity = MemoryObjectType(rawValue: 0x000D)
+  public static let daeGeneric = MemoryObjectType(rawValue: 0x000E)
+}
+
+/// AUDIO_CLUSTER format (IEEE 1722.1-2021 Table 7-28).
+public struct AudioClusterFormat: RawRepresentable, Sendable, Hashable {
+  public let rawValue: UInt8
+  public init(rawValue: UInt8) { self.rawValue = rawValue }
+
+  public static let iec60958 = AudioClusterFormat(rawValue: 0x00)
+  public static let mbla = AudioClusterFormat(rawValue: 0x40)
+  public static let midi = AudioClusterFormat(rawValue: 0x80)
+  public static let smpte = AudioClusterFormat(rawValue: 0x88)
+}
+
+/// TIMING algorithm (IEEE 1722.1-2021 Table 7-64).
+public struct TimingAlgorithm: RawRepresentable, Sendable, Hashable {
+  public let rawValue: UInt16
+  public init(rawValue: UInt16) { self.rawValue = rawValue }
+
+  public static let single = TimingAlgorithm(rawValue: 0x0000)
+  public static let fallback = TimingAlgorithm(rawValue: 0x0001)
+  public static let combined = TimingAlgorithm(rawValue: 0x0002)
+}
+
+/// PTP_PORT port_type (IEEE 1722.1-2021 Table 7-68).
+public struct PtpPortType: RawRepresentable, Sendable, Hashable {
+  public let rawValue: UInt16
+  public init(rawValue: UInt16) { self.rawValue = rawValue }
+
+  public static let p2pLinkLayer = PtpPortType(rawValue: 0x0000)
+  public static let p2pMulticastUdpV4 = PtpPortType(rawValue: 0x0001)
+  public static let p2pMulticastUdpV6 = PtpPortType(rawValue: 0x0002)
+  public static let timingMeasurement = PtpPortType(rawValue: 0x0003)
+  public static let fineTimingMeasurement = PtpPortType(rawValue: 0x0004)
+  public static let e2eLinkLayer = PtpPortType(rawValue: 0x0005)
+  public static let e2eMulticastUdpV4 = PtpPortType(rawValue: 0x0006)
+  public static let e2eMulticastUdpV6 = PtpPortType(rawValue: 0x0007)
+  public static let p2pUnicastUdpV4 = PtpPortType(rawValue: 0x0008)
+  public static let p2pUnicastUdpV6 = PtpPortType(rawValue: 0x0009)
+  public static let e2eUnicastUdpV4 = PtpPortType(rawValue: 0x000A)
+  public static let e2eUnicastUdpV6 = PtpPortType(rawValue: 0x000B)
+}
+
+/// CONTROL control_value_type (IEEE 1722.1-2021 §7.3.6.1): the read only and unknown value flags,
+/// then a 14-bit value type.
+public struct ControlValueType: RawRepresentable, Sendable, Hashable {
+  public let rawValue: UInt16
+  public init(rawValue: UInt16) { self.rawValue = rawValue }
+
+  public init(_ kind: Kind, isReadOnly: Bool = false, isValueUnknown: Bool = false) {
+    rawValue = kind.rawValue & 0x3FFF | (isReadOnly ? 0x8000 : 0) | (isValueUnknown ? 0x4000 : 0)
+  }
+
+  public var isReadOnly: Bool { rawValue & 0x8000 != 0 }
+  public var isValueUnknown: Bool { rawValue & 0x4000 != 0 }
+  public var kind: Kind { Kind(rawValue: rawValue & 0x3FFF) }
+
+  /// value_type (IEEE 1722.1-2021 Table 7-121).
+  public struct Kind: RawRepresentable, Sendable, Hashable {
+    public let rawValue: UInt16
+    public init(rawValue: UInt16) { self.rawValue = rawValue }
+
+    public static let linearInt8 = Kind(rawValue: 0x0000)
+    public static let linearUInt8 = Kind(rawValue: 0x0001)
+    public static let linearInt16 = Kind(rawValue: 0x0002)
+    public static let linearUInt16 = Kind(rawValue: 0x0003)
+    public static let linearInt32 = Kind(rawValue: 0x0004)
+    public static let linearUInt32 = Kind(rawValue: 0x0005)
+    public static let linearInt64 = Kind(rawValue: 0x0006)
+    public static let linearUInt64 = Kind(rawValue: 0x0007)
+    public static let linearFloat = Kind(rawValue: 0x0008)
+    public static let linearDouble = Kind(rawValue: 0x0009)
+    public static let selectorInt8 = Kind(rawValue: 0x000A)
+    public static let selectorUInt8 = Kind(rawValue: 0x000B)
+    public static let selectorInt16 = Kind(rawValue: 0x000C)
+    public static let selectorUInt16 = Kind(rawValue: 0x000D)
+    public static let selectorInt32 = Kind(rawValue: 0x000E)
+    public static let selectorUInt32 = Kind(rawValue: 0x000F)
+    public static let selectorInt64 = Kind(rawValue: 0x0010)
+    public static let selectorUInt64 = Kind(rawValue: 0x0011)
+    public static let selectorFloat = Kind(rawValue: 0x0012)
+    public static let selectorDouble = Kind(rawValue: 0x0013)
+    public static let selectorString = Kind(rawValue: 0x0014)
+    public static let arrayInt8 = Kind(rawValue: 0x0015)
+    public static let arrayUInt8 = Kind(rawValue: 0x0016)
+    public static let arrayInt16 = Kind(rawValue: 0x0017)
+    public static let arrayUInt16 = Kind(rawValue: 0x0018)
+    public static let arrayInt32 = Kind(rawValue: 0x0019)
+    public static let arrayUInt32 = Kind(rawValue: 0x001A)
+    public static let arrayInt64 = Kind(rawValue: 0x001B)
+    public static let arrayUInt64 = Kind(rawValue: 0x001C)
+    public static let arrayFloat = Kind(rawValue: 0x001D)
+    public static let arrayDouble = Kind(rawValue: 0x001E)
+    public static let utf8 = Kind(rawValue: 0x001F)
+    public static let bodePlot = Kind(rawValue: 0x0020)
+    public static let smpteTime = Kind(rawValue: 0x0021)
+    public static let sampleRate = Kind(rawValue: 0x0022)
+    public static let gptpTime = Kind(rawValue: 0x0023)
+    public static let vendor = Kind(rawValue: 0x3FFE)
+    public static let expansion = Kind(rawValue: 0x3FFF)
+  }
+}
+
 // MARK: - Descriptors
 
 /// ENTITY descriptor (IEEE 1722.1-2021 §7.2.1).
@@ -548,7 +720,7 @@ public struct JackDescriptor: Sendable, Hashable, CustomStringConvertible {
   public var objectName: String
   public var localizedDescription: LocalizedStringReference
   public var jackFlags: JackFlags
-  public var jackType: UInt16
+  public var jackType: JackType
   public var numberOfControls: UInt16
   public var baseControl: UInt16
 
@@ -557,7 +729,7 @@ public struct JackDescriptor: Sendable, Hashable, CustomStringConvertible {
     objectName = try String(parsingAvdeccFixedString: &input)
     localizedDescription = try LocalizedStringReference(parsing: &input)
     jackFlags = try JackFlags(rawValue: UInt16(parsingBigEndian: &input))
-    jackType = try UInt16(parsingBigEndian: &input)
+    jackType = try JackType(rawValue: UInt16(parsingBigEndian: &input))
     numberOfControls = try UInt16(parsingBigEndian: &input)
     baseControl = try UInt16(parsingBigEndian: &input)
   }
@@ -566,7 +738,7 @@ public struct JackDescriptor: Sendable, Hashable, CustomStringConvertible {
     context.serialize(avdeccFixedString: objectName)
     try context.serialize(localizedDescription)
     context.serialize(uint16: jackFlags.rawValue)
-    context.serialize(uint16: jackType)
+    context.serialize(uint16: jackType.rawValue)
     context.serialize(uint16: numberOfControls)
     context.serialize(uint16: baseControl)
   }
@@ -745,7 +917,7 @@ public struct MemoryObjectDescriptor: Sendable, Hashable, CustomStringConvertibl
 
   public var objectName: String
   public var localizedDescription: LocalizedStringReference
-  public var memoryObjectType: UInt16
+  public var memoryObjectType: MemoryObjectType
   public var targetDescriptorType: DescriptorType
   public var targetDescriptorIndex: UInt16
   public var startAddress: UInt64
@@ -759,7 +931,7 @@ public struct MemoryObjectDescriptor: Sendable, Hashable, CustomStringConvertibl
     try input.requireRemaining(Self.bodyLength)
     objectName = try String(parsingAvdeccFixedString: &input)
     localizedDescription = try LocalizedStringReference(parsing: &input)
-    memoryObjectType = try UInt16(parsingBigEndian: &input)
+    memoryObjectType = try MemoryObjectType(rawValue: UInt16(parsingBigEndian: &input))
     targetDescriptorType = try DescriptorType(parsing: &input)
     targetDescriptorIndex = try UInt16(parsingBigEndian: &input)
     startAddress = try UInt64(parsingBigEndian: &input)
@@ -771,7 +943,7 @@ public struct MemoryObjectDescriptor: Sendable, Hashable, CustomStringConvertibl
   func serializeBody(into context: inout SerializationContext) throws {
     context.serialize(avdeccFixedString: objectName)
     try context.serialize(localizedDescription)
-    context.serialize(uint16: memoryObjectType)
+    context.serialize(uint16: memoryObjectType.rawValue)
     try context.serialize(targetDescriptorType)
     context.serialize(uint16: targetDescriptorIndex)
     context.serialize(uint64: startAddress)
@@ -986,7 +1158,7 @@ public struct AudioClusterDescriptor: Sendable, Hashable, CustomStringConvertibl
   public var pathLatency: UInt32
   public var blockLatency: UInt32
   public var channelCount: UInt16
-  public var format: UInt8
+  public var format: AudioClusterFormat
   /// The AES3 data type when `format` is IEC 60958 (IEEE 1722.1-2021 Table 7-27); zero in an
   /// IEEE 1722.1-2013 descriptor, which ends at `format`.
   public var aes3DataTypeReference: UInt8
@@ -1002,7 +1174,7 @@ public struct AudioClusterDescriptor: Sendable, Hashable, CustomStringConvertibl
     pathLatency = try UInt32(parsingBigEndian: &input)
     blockLatency = try UInt32(parsingBigEndian: &input)
     channelCount = try UInt16(parsingBigEndian: &input)
-    format = try UInt8(parsing: &input)
+    format = try AudioClusterFormat(rawValue: UInt8(parsing: &input))
     if input.count >= 3 {
       aes3DataTypeReference = try UInt8(parsing: &input)
       aes3DataType = try UInt16(parsingBigEndian: &input)
@@ -1021,7 +1193,7 @@ public struct AudioClusterDescriptor: Sendable, Hashable, CustomStringConvertibl
     context.serialize(uint32: pathLatency)
     context.serialize(uint32: blockLatency)
     context.serialize(uint16: channelCount)
-    context.serialize(uint8: format)
+    context.serialize(uint8: format.rawValue)
     context.serialize(uint8: aes3DataTypeReference)
     context.serialize(uint16: aes3DataType)
   }
@@ -1071,7 +1243,7 @@ public struct ControlDescriptor: Sendable, Hashable, CustomStringConvertible {
   public var blockLatency: UInt32
   public var controlLatency: UInt32
   public var controlDomain: UInt16
-  public var controlValueType: UInt16
+  public var controlValueType: ControlValueType
   public var controlType: UniqueIdentifier
   public var resetTime: UInt32
   public var numberOfValues: UInt16
@@ -1088,7 +1260,7 @@ public struct ControlDescriptor: Sendable, Hashable, CustomStringConvertible {
     blockLatency = try UInt32(parsingBigEndian: &input)
     controlLatency = try UInt32(parsingBigEndian: &input)
     controlDomain = try UInt16(parsingBigEndian: &input)
-    controlValueType = try UInt16(parsingBigEndian: &input)
+    controlValueType = try ControlValueType(rawValue: UInt16(parsingBigEndian: &input))
     controlType = try UniqueIdentifier(parsing: &input)
     resetTime = try UInt32(parsingBigEndian: &input)
     let valuesOffset = try UInt16(parsingBigEndian: &input)
@@ -1106,7 +1278,7 @@ public struct ControlDescriptor: Sendable, Hashable, CustomStringConvertible {
     context.serialize(uint32: blockLatency)
     context.serialize(uint32: controlLatency)
     context.serialize(uint16: controlDomain)
-    context.serialize(uint16: controlValueType)
+    context.serialize(uint16: controlValueType.rawValue)
     try context.serialize(controlType)
     context.serialize(uint32: resetTime)
     context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
@@ -1171,14 +1343,14 @@ public struct TimingDescriptor: Sendable, Hashable, CustomStringConvertible {
 
   public var objectName: String
   public var localizedDescription: LocalizedStringReference
-  public var algorithm: UInt16
+  public var algorithm: TimingAlgorithm
   public var ptpInstances: [UInt16]
 
   init(parsingBody input: inout ParserSpan) throws {
     try input.requireRemaining(Self.bodyLength)
     objectName = try String(parsingAvdeccFixedString: &input)
     localizedDescription = try LocalizedStringReference(parsing: &input)
-    algorithm = try UInt16(parsingBigEndian: &input)
+    algorithm = try TimingAlgorithm(rawValue: UInt16(parsingBigEndian: &input))
     let ptpInstancesOffset = try UInt16(parsingBigEndian: &input)
     let numberOfPtpInstances = try UInt16(parsingBigEndian: &input)
     var instances = try input.seeking(toAbsoluteOffset: input.descriptorOffset(ptpInstancesOffset))
@@ -1191,7 +1363,7 @@ public struct TimingDescriptor: Sendable, Hashable, CustomStringConvertible {
   func serializeBody(into context: inout SerializationContext) throws {
     context.serialize(avdeccFixedString: objectName)
     try context.serialize(localizedDescription)
-    context.serialize(uint16: algorithm)
+    context.serialize(uint16: algorithm.rawValue)
     context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
     context.serialize(uint16: UInt16(ptpInstances.count))
     for instance in ptpInstances {
@@ -1254,7 +1426,7 @@ public struct PtpPortDescriptor: Sendable, Hashable, CustomStringConvertible {
   public var objectName: String
   public var localizedDescription: LocalizedStringReference
   public var portNumber: UInt16
-  public var portType: UInt16
+  public var portType: PtpPortType
   public var flags: PtpPortFlags
   public var avbInterfaceIndex: UInt16
   /// The six-octet PTP profileIdentifier.
@@ -1265,7 +1437,7 @@ public struct PtpPortDescriptor: Sendable, Hashable, CustomStringConvertible {
     objectName = try String(parsingAvdeccFixedString: &input)
     localizedDescription = try LocalizedStringReference(parsing: &input)
     portNumber = try UInt16(parsingBigEndian: &input)
-    portType = try UInt16(parsingBigEndian: &input)
+    portType = try PtpPortType(rawValue: UInt16(parsingBigEndian: &input))
     flags = try PtpPortFlags(rawValue: UInt32(parsingBigEndian: &input))
     avbInterfaceIndex = try UInt16(parsingBigEndian: &input)
     profileIdentifier = try _eui48(parsing: &input)
@@ -1275,7 +1447,7 @@ public struct PtpPortDescriptor: Sendable, Hashable, CustomStringConvertible {
     context.serialize(avdeccFixedString: objectName)
     try context.serialize(localizedDescription)
     context.serialize(uint16: portNumber)
-    context.serialize(uint16: portType)
+    context.serialize(uint16: portType.rawValue)
     context.serialize(uint32: flags.rawValue)
     context.serialize(uint16: avbInterfaceIndex)
     context.serialize(eui48: profileIdentifier)
