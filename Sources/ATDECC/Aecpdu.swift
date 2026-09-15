@@ -139,6 +139,9 @@ public let IdentifyNotificationControllerEntityID = UniqueIdentifier(0x90E0_F0FF
 /// (Milan 1.3 §5.4.3.1).
 public let MvuProtocolIdentifier: UInt64 = 0x001B_C50A_C100
 
+/// The largest control_data_length of an AECPDU (IEEE 1722.1-2021 §9.2.2.6).
+let AecpMaximumControlDataLength = 524
+
 // AECP common header following the AVTP control header: controller_entity_id, sequence_id.
 private let _aecpduHeaderLength = 10
 // u (unsolicited) and cr (controller request) flags and command_type.
@@ -384,7 +387,7 @@ extension Aecpdu: SerDes {
 
   public func serialize(into serializationContext: inout SerializationContext) throws {
     let controlDataLength = _aecpduHeaderLength + _specificDataLength
-    guard controlDataLength <= 0x07FF else { throw AvdeccCodecError.valueTooLarge }
+    guard controlDataLength <= AecpMaximumControlDataLength else { throw AvdeccCodecError.valueTooLarge }
 
     let status: UInt8 = switch self {
     case let .aem(aem): aem.status

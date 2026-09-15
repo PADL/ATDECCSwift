@@ -417,6 +417,30 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  // 100 mappings exceed one 524-octet AECPDU, so they go as 63 and 37 (§9.2.2.6)
+  func testAudioMappingsAreSplitAcrossCommands() async throws {
+    let controller = try await makeController()
+    let mappings = (0..<UInt16(100)).map {
+      AudioMapping(streamIndex: 0, streamChannel: $0, clusterOffset: $0, clusterChannel: 0)
+    }
+    let added = try await controller.addStreamPortInputAudioMappings(
+      id: entityID,
+      streamPortIndex: 0,
+      mappings: mappings
+    )
+    XCTAssertEqual(added, mappings)
+    let counts = entity.received.withLock { received in
+      received.compactMap { pdu -> Int? in
+        guard case let .aecp(.aem(aem)) = pdu, !aem.isResponse, aem.commandType == .addAudioMappings
+        else { return nil }
+        // descriptor_type, descriptor_index, number_of_mappings, reserved, then 8 octets each
+        return (aem.commandSpecificData.count - 8) / 8
+      }
+    }
+    XCTAssertEqual(counts, [63, 37])
+    await controller.close()
+  }
+
   func testCommandToUnknownEntity() async throws {
     let controller = try await makeController()
     do {

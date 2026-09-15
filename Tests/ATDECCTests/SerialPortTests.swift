@@ -152,8 +152,9 @@ private final class Completion<Success: Sendable>: Sendable {
 private let stalledSendTimeout = Duration.milliseconds(250)
 // Far more frames than a terminal's buffers hold.
 private let maximumFramesToStall = 1000
-// Large enough that a few dozen frames fill a terminal's buffers.
-private let largeCommandSpecificDataLength = 1400
+// The most an AECPDU can carry (524-octet control data, IEEE 1722.1-2021 §9.2.2.6), so that
+// a hundred or so frames fill a terminal's buffers.
+private let largeCommandSpecificDataLength = 512
 
 final class SerialPortTests: XCTestCase {
   // An ENTITY_DISCOVER for all entities (entity_id 0, §6.2.6.3), as serialized by the codec.

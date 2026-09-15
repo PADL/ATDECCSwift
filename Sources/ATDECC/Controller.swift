@@ -2160,22 +2160,41 @@ public extension Controller {
     try await _getAudioMap(targetEntityID, .streamPortOutput, streamPortIndex, mapIndex)
   }
 
+  /// ADD/REMOVE_AUDIO_MAPPINGS commands of at most 63 mappings, which fill a 524-octet AECPDU
+  /// (IEEE 1722.1-2021 §9.2.2.6); an empty list is still one command. Commands before a failing
+  /// one remain applied.
+  private func _audioMappingCommands(_ mappings: [AudioMapping]) -> [[AudioMapping]] {
+    let mappingsPerCommand = 63
+    guard !mappings.isEmpty else { return [[]] }
+    return stride(from: 0, to: mappings.count, by: mappingsPerCommand).map {
+      Array(mappings[$0..<min($0 + mappingsPerCommand, mappings.count)])
+    }
+  }
+
   private func _addAudioMappings(
     _ id: UniqueIdentifier, _ type: DescriptorType, _ streamPortIndex: UInt16, _ mappings: [AudioMapping]
   ) async throws -> [AudioMapping] {
-    guard case let .addAudioMappings(_, _, mappings) = try await _aem(id, .addAudioMappings(
-      descriptorType: type, descriptorIndex: streamPortIndex, mappings: mappings
-    )) else { throw AemStatus.protocolError }
-    return mappings
+    var added = [AudioMapping]()
+    for command in _audioMappingCommands(mappings) {
+      guard case let .addAudioMappings(_, _, mappings) = try await _aem(id, .addAudioMappings(
+        descriptorType: type, descriptorIndex: streamPortIndex, mappings: command
+      )) else { throw AemStatus.protocolError }
+      added += mappings
+    }
+    return added
   }
 
   private func _removeAudioMappings(
     _ id: UniqueIdentifier, _ type: DescriptorType, _ streamPortIndex: UInt16, _ mappings: [AudioMapping]
   ) async throws -> [AudioMapping] {
-    guard case let .removeAudioMappings(_, _, mappings) = try await _aem(id, .removeAudioMappings(
-      descriptorType: type, descriptorIndex: streamPortIndex, mappings: mappings
-    )) else { throw AemStatus.protocolError }
-    return mappings
+    var removed = [AudioMapping]()
+    for command in _audioMappingCommands(mappings) {
+      guard case let .removeAudioMappings(_, _, mappings) = try await _aem(id, .removeAudioMappings(
+        descriptorType: type, descriptorIndex: streamPortIndex, mappings: command
+      )) else { throw AemStatus.protocolError }
+      removed += mappings
+    }
+    return removed
   }
 
   @discardableResult
