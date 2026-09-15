@@ -32,6 +32,9 @@ public enum ControllerEvent: Sendable {
   case entityOffline(UniqueIdentifier)
   case entityIdentifyNotification(UniqueIdentifier)
   case deregisteredFromUnsolicitedNotifications(UniqueIdentifier)
+  /// Another controller rebooted the entity, or part of it (IEEE 1722.1-2021 §7.4.43): its state
+  /// is about to be lost.
+  case entityRebooting(UniqueIdentifier, descriptorType: UInt16, descriptorIndex: UInt16)
 
   case controllerConnectResponse(StreamConnectionState, AcmpStatus)
   case controllerDisconnectResponse(StreamConnectionState, AcmpStatus)
@@ -124,7 +127,8 @@ public extension ControllerEvent {
     case .transportError:
       UniqueIdentifier?.none
     case let .entityOnline(id), let .entityUpdated(id), let .entityOffline(id),
-         let .entityIdentifyNotification(id), let .deregisteredFromUnsolicitedNotifications(id):
+         let .entityIdentifyNotification(id), let .deregisteredFromUnsolicitedNotifications(id),
+         let .entityRebooting(id, _, _):
       id
     case let .controllerConnectResponse(state, _), let .controllerDisconnectResponse(state, _),
          let .listenerConnectResponse(state, _), let .listenerDisconnectResponse(state, _),

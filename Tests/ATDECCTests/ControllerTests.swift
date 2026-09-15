@@ -147,6 +147,18 @@ private final class FakeEntity: Sendable {
     try await send(.aecp(.aem(aem)), to: controllerMacAddress)
   }
 
+  /// One transmission of an IDENTIFY_NOTIFICATION (IEEE 1722.1-2021 §7.5.1).
+  func sendIdentifyNotification(sequenceID: UInt16) async throws {
+    try await send(.aecp(.aem(AemAecpdu(
+      isResponse: true,
+      targetEntityID: entityID,
+      controllerEntityID: IdentifyNotificationControllerEntityID,
+      sequenceID: sequenceID,
+      unsolicited: true,
+      commandType: .setControl
+    ))), to: controllerMacAddress)
+  }
+
   /// Returns the first PDU received that matches `predicate`, waiting up to `timeout`.
   func firstReceived(
     timeout: Duration = .seconds(2),
@@ -320,6 +332,10 @@ private let talkerStream = StreamIdentification(
   streamIndex: 0
 )
 private let listenerStream = StreamIdentification(entityID: entityID, streamIndex: 0)
+
+private final class EventCount: Sendable {
+  let value = Mutex(0)
+}
 
 final class ControllerTests: XCTestCase {
   private var network: VirtualNetwork!
@@ -605,6 +621,44 @@ final class ControllerTests: XCTestCase {
       if case .audioUnitSamplingRateChanged = $0 { true } else { false }
     }
     XCTAssertNil(changed)
+    await controller.close()
+  }
+
+  // an identification is sent three times with one sequence_id (§7.5.1.2.1) and reported once
+  func testIdentifyNotificationIsReportedOncePerSequenceID() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    let identifications = EventCount()
+    let counting = Task {
+      for await case .entityIdentifyNotification(entityID) in events {
+        identifications.value.withLock { $0 += 1 }
+      }
+    }
+    defer { counting.cancel() }
+    for _ in 0..<3 {
+      try await entity.sendIdentifyNotification(sequenceID: 0)
+    }
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertEqual(identifications.value.withLock { $0 }, 1)
+    // a held button identifies again a second later, with the next sequence_id
+    try await entity.sendIdentifyNotification(sequenceID: 1)
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertEqual(identifications.value.withLock { $0 }, 2)
+    await controller.close()
+  }
+
+  func testUnsolicitedRebootIsReported() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    try await entity.sendUnsolicited(.reboot, data: be16(DescriptorType.entity.rawValue) + be16(0))
+    let rebooting = await first(events) {
+      if case .entityRebooting(entityID, descriptorType: DescriptorType.entity.rawValue, descriptorIndex: 0) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    XCTAssertNotNil(rebooting)
     await controller.close()
   }
 

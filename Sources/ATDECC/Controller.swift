@@ -228,6 +228,8 @@ public actor Controller<Port: NetworkPort> {
   private var _aecpSequenceID = UInt16(0)
   private var _mvuSequenceID = UInt16(0)
   private var _acmpSequenceID = UInt16(0)
+  /// The sequence_id of each entity's last identify notification, which is sent three times.
+  private var _identifySequenceIDs = [UniqueIdentifier: UInt16]()
   private var _aecpTargets = [UniqueIdentifier: AecpTarget]()
   private var _acmpTransactions = [UInt16: AcmpTransaction]()
   private var _advertising: Advertising?
@@ -445,10 +447,13 @@ public actor Controller<Port: NetworkPort> {
     for event in events {
       switch event {
       case let .online(entity):
+        // a rebooted entity numbers its identify notifications from zero again
+        _identifySequenceIDs[entity.entityID] = nil
         _yield(.entityOnline(entity.entityID))
       case let .updated(entity):
         _yield(.entityUpdated(entity.entityID))
       case let .offline(entityID):
+        _identifySequenceIDs[entityID] = nil
         _yield(.entityOffline(entityID))
         _failAecpCommands(towards: entityID)
         // an entity that returns has lost its registrations
@@ -827,7 +832,11 @@ public actor Controller<Port: NetworkPort> {
         return
       }
       if aem.unsolicited, aem.controllerEntityID == IdentifyNotificationControllerEntityID {
-        _yield(.entityIdentifyNotification(aem.targetEntityID))
+        // each is sent three times with one sequence_id, and a held button sends the next one
+        // every second (IEEE 1722.1-2021 §7.5.1)
+        if _identifySequenceIDs.updateValue(aem.sequenceID, forKey: aem.targetEntityID) != aem.sequenceID {
+          _yield(.entityIdentifyNotification(aem.targetEntityID))
+        }
         return
       }
       guard aem.controllerEntityID == entityID else { return }
@@ -1128,8 +1137,10 @@ public actor Controller<Port: NetworkPort> {
          let .getMaxTransitTime(descriptorType, descriptorIndex, maxTransitTime):
       guard descriptorType == .streamOutput else { break }
       _yield(.maxTransitTimeChanged(id, streamIndex: descriptorIndex, maxTransitTime: maxTransitTime))
+    case let .reboot(descriptorType, descriptorIndex):
+      _yield(.entityRebooting(id, descriptorType: descriptorType.rawValue, descriptorIndex: descriptorIndex))
     case .entityAvailable, .controllerAvailable, .readDescriptor, .registerUnsolicitedNotification,
-         .reboot, .startOperation, .abortOperation, .other:
+         .startOperation, .abortOperation, .other:
       break
     }
   }
