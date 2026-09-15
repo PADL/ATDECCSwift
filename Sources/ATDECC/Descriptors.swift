@@ -439,6 +439,9 @@ public struct StreamDescriptor: Sendable, Hashable, CustomStringConvertible {
   public var formats: [StreamFormat]
   /// Indices of streams that form a redundant set with this one (Milan).
   public var redundantStreams: [UInt16]
+  /// The TIMING descriptor that is the source of the stream's gPTP time (IEEE 1722.1-2021
+  /// Table 7-8); nil when the descriptor has no timing field.
+  public var timing: DescriptorIndex?
 
   init(parsingBody input: inout ParserSpan) throws {
     try input.requireRemaining(Self.bodyLength)
@@ -475,8 +478,12 @@ public struct StreamDescriptor: Sendable, Hashable, CustomStringConvertible {
       redundantStreams = try (0..<numberOfRedundantStreams).map { _ in
         try UInt16(parsingBigEndian: &redundant)
       }
+      // IEEE 1722.1-2021 adds timing after the redundancy fields
+      timing = Int(formatsOffset) - input.startPosition >= MemoryLayout<UInt16>.size
+        ? try UInt16(parsingBigEndian: &input) : nil
     } else {
       redundantStreams = []
+      timing = nil
     }
 
     var formatsSpan = try input.seeking(toAbsoluteOffset: input.descriptorOffset(formatsOffset))
@@ -487,8 +494,11 @@ public struct StreamDescriptor: Sendable, Hashable, CustomStringConvertible {
   }
 
   func serializeBody(into context: inout SerializationContext) throws {
+    // timing follows the redundancy fields, which are written for it even with no redundant streams
+    let hasRedundancyFields = !redundantStreams.isEmpty || timing != nil
     let formatsOffset = _descriptorHeaderLength + Self.bodyLength +
-      (redundantStreams.isEmpty ? 0 : Self.redundancyFieldsLength)
+      (hasRedundancyFields ? Self.redundancyFieldsLength : 0) +
+      (timing == nil ? 0 : MemoryLayout<UInt16>.size)
     context.serialize(avdeccFixedString: objectName)
     try context.serialize(localizedDescription)
     context.serialize(uint16: clockDomainIndex)
@@ -506,9 +516,12 @@ public struct StreamDescriptor: Sendable, Hashable, CustomStringConvertible {
     context.serialize(uint16: backedupTalkerUniqueID)
     context.serialize(uint16: avbInterfaceIndex)
     context.serialize(uint32: bufferLength)
-    if !redundantStreams.isEmpty {
+    if hasRedundancyFields {
       context.serialize(uint16: UInt16(formatsOffset + formats.count * 8))
       context.serialize(uint16: UInt16(redundantStreams.count))
+    }
+    if let timing {
+      context.serialize(uint16: timing)
     }
     for format in formats {
       try context.serialize(format)
@@ -738,6 +751,9 @@ public struct MemoryObjectDescriptor: Sendable, Hashable, CustomStringConvertibl
   public var startAddress: UInt64
   public var maximumLength: UInt64
   public var length: UInt64
+  /// The largest segment an operation on the object may use (IEEE 1722.1-2021 Table 7-18); zero
+  /// in an IEEE 1722.1-2013 descriptor, which ends at `length`.
+  public var maximumSegmentLength: UInt64
 
   init(parsingBody input: inout ParserSpan) throws {
     try input.requireRemaining(Self.bodyLength)
@@ -749,6 +765,7 @@ public struct MemoryObjectDescriptor: Sendable, Hashable, CustomStringConvertibl
     startAddress = try UInt64(parsingBigEndian: &input)
     maximumLength = try UInt64(parsingBigEndian: &input)
     length = try UInt64(parsingBigEndian: &input)
+    maximumSegmentLength = input.count >= 8 ? try UInt64(parsingBigEndian: &input) : 0
   }
 
   func serializeBody(into context: inout SerializationContext) throws {
@@ -760,6 +777,7 @@ public struct MemoryObjectDescriptor: Sendable, Hashable, CustomStringConvertibl
     context.serialize(uint64: startAddress)
     context.serialize(uint64: maximumLength)
     context.serialize(uint64: length)
+    context.serialize(uint64: maximumSegmentLength)
   }
 
   public var description: String {
@@ -969,6 +987,10 @@ public struct AudioClusterDescriptor: Sendable, Hashable, CustomStringConvertibl
   public var blockLatency: UInt32
   public var channelCount: UInt16
   public var format: UInt8
+  /// The AES3 data type when `format` is IEC 60958 (IEEE 1722.1-2021 Table 7-27); zero in an
+  /// IEEE 1722.1-2013 descriptor, which ends at `format`.
+  public var aes3DataTypeReference: UInt8
+  public var aes3DataType: UInt16
 
   init(parsingBody input: inout ParserSpan) throws {
     try input.requireRemaining(Self.bodyLength)
@@ -981,6 +1003,13 @@ public struct AudioClusterDescriptor: Sendable, Hashable, CustomStringConvertibl
     blockLatency = try UInt32(parsingBigEndian: &input)
     channelCount = try UInt16(parsingBigEndian: &input)
     format = try UInt8(parsing: &input)
+    if input.count >= 3 {
+      aes3DataTypeReference = try UInt8(parsing: &input)
+      aes3DataType = try UInt16(parsingBigEndian: &input)
+    } else {
+      aes3DataTypeReference = 0
+      aes3DataType = 0
+    }
   }
 
   func serializeBody(into context: inout SerializationContext) throws {
@@ -993,6 +1022,8 @@ public struct AudioClusterDescriptor: Sendable, Hashable, CustomStringConvertibl
     context.serialize(uint32: blockLatency)
     context.serialize(uint16: channelCount)
     context.serialize(uint8: format)
+    context.serialize(uint8: aes3DataTypeReference)
+    context.serialize(uint16: aes3DataType)
   }
 
   public var description: String {

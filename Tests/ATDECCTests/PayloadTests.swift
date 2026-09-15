@@ -164,6 +164,29 @@ final class PayloadTests: XCTestCase {
     XCTAssertEqual(context.bytes, bytes)
   }
 
+  // IEEE 1722.1-2021 Table 7-8: timing follows the redundancy fields, at 136
+  func testStreamDescriptorTiming() throws {
+    let format: UInt64 = 0x0205_0220_0040_6000
+    var body = fixedString("Input 1") + be16(0xFFFF) + be16(0) // name, localized, clock domain
+    body += be16(StreamFlags.classA.rawValue) + be64(format)
+    body += be16(138) + be16(1) // formats_offset, number_of_formats
+    body += [UInt8](repeating: 0, count: 40) // backup talkers and backedup talker
+    body += be16(0) + be32(2_000_000) // avb_interface_index, buffer_length
+    body += be16(146) + be16(0) // redundant_offset, number_of_redundant_streams
+    body += be16(3) // timing
+    let bytes = be16(DescriptorType.streamInput.rawValue) + be16(0) + body + be64(format)
+    guard case let (_, _, .streamInput(stream)) = try readDescriptorResponse(bytes) else {
+      return XCTFail("expected STREAM_INPUT")
+    }
+    XCTAssertEqual(stream.timing, 3)
+    XCTAssertTrue(stream.redundantStreams.isEmpty)
+    XCTAssertEqual(stream.formats.map(\.format), [format])
+
+    var context = SerializationContext()
+    try Descriptor.streamInput(stream).serialize(descriptorIndex: 0, into: &context)
+    XCTAssertEqual(context.bytes, bytes)
+  }
+
   func testStreamDescriptorFormatsOverlappingRedundantStreamsRejected() {
     // redundant_offset 144 falls inside the formats at 136..<152
     XCTAssertThrowsError(try readDescriptorResponse(redundantStreamDescriptor(redundantOffset: 144))) {
@@ -645,6 +668,53 @@ extension PayloadTests {
       commandTypeRaw: AemCommandType.setName.rawValue,
       data: Array(data.dropLast())
     ))
+  }
+
+  // IEEE 1722.1-2021 Table 7-27 adds aes3_data_type_reference and aes3_data_type after format
+  func testAudioClusterDescriptorAes3DataType() throws {
+    // object_name, localized_description, signal_type, signal_index, signal_output,
+    // path_latency, block_latency, channel_count, format
+    var body = fixedString("Cluster 1") + be16(0xFFFF) + be16(DescriptorType.invalid.rawValue) +
+      be16(0) + be16(0) + be32(10) + be32(20) + be16(8) + [0x40]
+    guard case let (_, _, .audioCluster(short)) =
+      try readDescriptorResponse(be16(DescriptorType.audioCluster.rawValue) + be16(0) + body)
+    else { return XCTFail("expected AUDIO_CLUSTER") }
+    XCTAssertEqual(short.channelCount, 8)
+    XCTAssertEqual(short.aes3DataType, 0)
+
+    body += [0x01] + be16(0x0002)
+    let bytes = be16(DescriptorType.audioCluster.rawValue) + be16(0) + body
+    guard case let (_, _, .audioCluster(cluster)) = try readDescriptorResponse(bytes) else {
+      return XCTFail("expected AUDIO_CLUSTER")
+    }
+    XCTAssertEqual(cluster.aes3DataTypeReference, 1)
+    XCTAssertEqual(cluster.aes3DataType, 2)
+    var context = SerializationContext()
+    try Descriptor.audioCluster(cluster).serialize(descriptorIndex: 0, into: &context)
+    XCTAssertEqual(context.bytes, bytes)
+  }
+
+  // IEEE 1722.1-2021 Table 7-18 adds maximum_segment_length after length
+  func testMemoryObjectDescriptorMaximumSegmentLength() throws {
+    // object_name, localized_description, memory_object_type, target_descriptor_type,
+    // target_descriptor_index, start_address, maximum_length, length
+    var body = fixedString("Firmware") + be16(0xFFFF) + be16(0) + be16(DescriptorType.entity.rawValue) +
+      be16(0) + be64(0x1000) + be64(0x10000) + be64(0x8000)
+    guard case let (_, _, .memoryObject(short)) =
+      try readDescriptorResponse(be16(DescriptorType.memoryObject.rawValue) + be16(0) + body)
+    else { return XCTFail("expected MEMORY_OBJECT") }
+    XCTAssertEqual(short.length, 0x8000)
+    XCTAssertEqual(short.maximumSegmentLength, 0)
+
+    body += be64(1400)
+    let bytes = be16(DescriptorType.memoryObject.rawValue) + be16(0) + body
+    guard case let (_, _, .memoryObject(object)) = try readDescriptorResponse(bytes) else {
+      return XCTFail("expected MEMORY_OBJECT")
+    }
+    XCTAssertEqual(object.maximumSegmentLength, 1400)
+    var context = SerializationContext()
+    try Descriptor.memoryObject(object).serialize(descriptorIndex: 0, into: &context)
+    XCTAssertEqual(context.bytes, bytes)
   }
 
   func testAvbInterfaceDescriptorComparesEveryField() throws {
