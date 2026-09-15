@@ -182,13 +182,16 @@ private final class InterfaceState: Sendable {
   }
 
   private let _reading = Mutex(Reading.running(false))
+  /// How many times the state has been read.
+  let reads = Mutex(0)
 
   func set(_ reading: Reading) {
     _reading.withLock { $0 = reading }
   }
 
   func read() throws -> Bool? {
-    switch _reading.withLock({ $0 }) {
+    reads.withLock { $0 += 1 }
+    return switch _reading.withLock({ $0 }) {
     case let .running(isRunning): isRunning
     case .absent: nil
     case .unreadable: throw StateReadFailure()
@@ -301,6 +304,13 @@ final class LinkMonitorTests: XCTestCase {
     var reported = await waitFor([false], in: reports)
     XCTAssertTrue(reported)
     firstContinuation.yield(.newLink(interfaceIndex: otherInterfaceIndex, flags: 0))
+    // the state is read after that notification too; change it only once it has been, so that
+    // only the read after subscribing again can report the change
+    let deadline = ContinuousClock.now + .seconds(1)
+    while state.reads.withLock({ $0 }) < 2, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    XCTAssertEqual(state.reads.withLock { $0 }, 2)
     state.set(.running(true))
     firstContinuation.finish(throwing: StateReadFailure())
     reported = await waitFor([false, true], in: reports)
