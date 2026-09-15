@@ -1189,10 +1189,24 @@ public actor Controller<Port: NetworkPort> {
          let .getMatrix(descriptorType, descriptorIndex, subregion, values):
       guard descriptorType == .matrix else { break }
       _yield(.matrixValuesChanged(id, matrixIndex: descriptorIndex, subregion: subregion, packedValues: values))
+    case let .setPtpInstanceInfo(descriptorType, descriptorIndex, settings):
+      guard descriptorType == .ptpInstance else { break }
+      _yield(.ptpInstanceSettingsChanged(id, ptpInstanceIndex: descriptorIndex, settings: settings))
+    case let .setPtpPortInitialIntervals(descriptorType, descriptorIndex, intervals),
+         let .getPtpPortInitialIntervals(descriptorType, descriptorIndex, intervals):
+      guard descriptorType == .ptpPort else { break }
+      _yield(.ptpPortInitialIntervalsChanged(id, ptpPortIndex: descriptorIndex, intervals: intervals))
+    case let .setPtpPortOverrides(descriptorType, descriptorIndex, overrides),
+         let .getPtpPortOverrides(descriptorType, descriptorIndex, overrides):
+      guard descriptorType == .ptpPort else { break }
+      _yield(.ptpPortOverridesChanged(id, ptpPortIndex: descriptorIndex, overrides: overrides))
     case let .reboot(descriptorType, descriptorIndex):
       _yield(.entityRebooting(id, descriptorType: descriptorType.rawValue, descriptorIndex: descriptorIndex))
     case .entityAvailable, .controllerAvailable, .readDescriptor, .registerUnsolicitedNotification,
-         .startOperation, .abortOperation, .getDynamicInfo, .getPathLatency, .other:
+         .startOperation, .abortOperation, .getDynamicInfo, .getPathLatency, .other,
+         .getPtpInstanceInfo, .getPtpInstanceExtendedInfo, .getPtpInstanceGrandmasterInfo, .getPtpInstancePathCount, .getPtpInstancePathTrace,
+         .getPtpInstancePerfMonCount, .getPtpInstancePerfMonRecord, .getPtpPortCurrentIntervals, .setPtpPortRemoteIntervals, .getPtpPortRemoteIntervals,
+         .getPtpPortPdelayMonCount, .getPtpPortPdelayMonRecord, .getPtpPortPerfMonCount, .getPtpPortPerfMonRecord:
       break
     }
   }
@@ -1903,6 +1917,164 @@ public extension Controller {
     )) else { throw AemStatus.protocolError }
     return pathLatency
   }
+
+  // MARK: PTP
+
+  /// SET_PTP_INSTANCE_INFO (IEEE 1722.1-2021 §7.4.81); `settings.flags` names the fields to set.
+  @discardableResult
+  func setPtpInstanceInfo(
+    id targetEntityID: UniqueIdentifier, ptpInstanceIndex: UInt16, to settings: PtpInstanceSettings
+  ) async throws -> PtpInstanceSettings {
+    guard case let .setPtpInstanceInfo(_, _, settings) = try await _aem(targetEntityID, .setPtpInstanceInfo(
+      descriptorType: .ptpInstance, descriptorIndex: ptpInstanceIndex, settings: settings
+    )) else { throw AemStatus.protocolError }
+    return settings
+  }
+
+  func getPtpInstanceInfo(id targetEntityID: UniqueIdentifier, ptpInstanceIndex: UInt16) async throws -> PtpInstanceInfo {
+    guard case let .getPtpInstanceInfo(_, _, value) = try await _aem(targetEntityID, .getPtpInstanceInfo(
+      descriptorType: .ptpInstance, descriptorIndex: ptpInstanceIndex
+    )) else { throw AemStatus.protocolError }
+    return value
+  }
+
+  func getPtpInstanceExtendedInfo(id targetEntityID: UniqueIdentifier, ptpInstanceIndex: UInt16) async throws -> PtpInstanceExtendedInfo {
+    guard case let .getPtpInstanceExtendedInfo(_, _, value) = try await _aem(targetEntityID, .getPtpInstanceExtendedInfo(
+      descriptorType: .ptpInstance, descriptorIndex: ptpInstanceIndex
+    )) else { throw AemStatus.protocolError }
+    return value
+  }
+
+  func getPtpInstanceGrandmasterInfo(id targetEntityID: UniqueIdentifier, ptpInstanceIndex: UInt16) async throws -> PtpGrandmasterInfo {
+    guard case let .getPtpInstanceGrandmasterInfo(_, _, value) = try await _aem(targetEntityID, .getPtpInstanceGrandmasterInfo(
+      descriptorType: .ptpInstance, descriptorIndex: ptpInstanceIndex
+    )) else { throw AemStatus.protocolError }
+    return value
+  }
+
+  func getPtpInstancePathCount(id targetEntityID: UniqueIdentifier, ptpInstanceIndex: UInt16) async throws -> UInt16 {
+    guard case let .getPtpInstancePathCount(_, _, value) = try await _aem(targetEntityID, .getPtpInstancePathCount(
+      descriptorType: .ptpInstance, descriptorIndex: ptpInstanceIndex
+    )) else { throw AemStatus.protocolError }
+    return value
+  }
+
+  /// GET_PTP_INSTANCE_PATH_TRACE (IEEE 1722.1-2021 §7.4.86): the entries from `startIndex` that fit
+  /// in one response.
+  func getPtpInstancePathTrace(
+    id targetEntityID: UniqueIdentifier, ptpInstanceIndex: UInt16, startIndex: UInt16
+  ) async throws -> [UniqueIdentifier] {
+    guard case let .getPtpInstancePathTrace(_, _, _, pathTrace) = try await _aem(targetEntityID, .getPtpInstancePathTrace(
+      descriptorType: .ptpInstance, descriptorIndex: ptpInstanceIndex, startIndex: startIndex
+    )) else { throw AemStatus.protocolError }
+    return pathTrace
+  }
+
+  func getPtpInstancePerfMonCount(id targetEntityID: UniqueIdentifier, ptpInstanceIndex: UInt16) async throws -> PtpPerfMonCounts {
+    guard case let .getPtpInstancePerfMonCount(_, _, value) = try await _aem(targetEntityID, .getPtpInstancePerfMonCount(
+      descriptorType: .ptpInstance, descriptorIndex: ptpInstanceIndex
+    )) else { throw AemStatus.protocolError }
+    return value
+  }
+
+  func getPtpInstancePerfMonRecord(id targetEntityID: UniqueIdentifier, ptpInstanceIndex: UInt16, recordIndex: UInt16) async throws -> PtpInstancePerfMonRecord {
+    guard case let .getPtpInstancePerfMonRecord(_, _, value) = try await _aem(targetEntityID, .getPtpInstancePerfMonRecord(
+      descriptorType: .ptpInstance, descriptorIndex: ptpInstanceIndex, recordIndex: recordIndex
+    )) else { throw AemStatus.protocolError }
+    return value
+  }
+
+  /// SET_PTP_PORT_INITIAL_INTERVALS (IEEE 1722.1-2021 §7.4.89); `intervals.flags` names the fields to set.
+  @discardableResult
+  func setPtpPortInitialIntervals(
+    id targetEntityID: UniqueIdentifier, ptpPortIndex: UInt16, to intervals: PtpPortIntervals
+  ) async throws -> PtpPortIntervals {
+    guard case let .setPtpPortInitialIntervals(_, _, intervals) = try await _aem(targetEntityID, .setPtpPortInitialIntervals(
+      descriptorType: .ptpPort, descriptorIndex: ptpPortIndex, intervals: intervals
+    )) else { throw AemStatus.protocolError }
+    return intervals
+  }
+
+  /// SET_PTP_PORT_REMOTE_INTERVALS (IEEE 1722.1-2021 §7.4.92): asks the port to signal these intervals
+  /// to its link partner.
+  @discardableResult
+  func setPtpPortRemoteIntervals(
+    id targetEntityID: UniqueIdentifier, ptpPortIndex: UInt16, to intervals: PtpPortIntervals
+  ) async throws -> PtpPortIntervals {
+    guard case let .setPtpPortRemoteIntervals(_, _, intervals) = try await _aem(targetEntityID, .setPtpPortRemoteIntervals(
+      descriptorType: .ptpPort, descriptorIndex: ptpPortIndex, intervals: intervals
+    )) else { throw AemStatus.protocolError }
+    return intervals
+  }
+
+  func getPtpPortInitialIntervals(id targetEntityID: UniqueIdentifier, ptpPortIndex: UInt16) async throws -> PtpPortIntervals {
+    guard case let .getPtpPortInitialIntervals(_, _, value) = try await _aem(targetEntityID, .getPtpPortInitialIntervals(
+      descriptorType: .ptpPort, descriptorIndex: ptpPortIndex
+    )) else { throw AemStatus.protocolError }
+    return value
+  }
+
+  func getPtpPortCurrentIntervals(id targetEntityID: UniqueIdentifier, ptpPortIndex: UInt16) async throws -> PtpPortIntervals {
+    guard case let .getPtpPortCurrentIntervals(_, _, value) = try await _aem(targetEntityID, .getPtpPortCurrentIntervals(
+      descriptorType: .ptpPort, descriptorIndex: ptpPortIndex
+    )) else { throw AemStatus.protocolError }
+    return value
+  }
+
+  func getPtpPortRemoteIntervals(id targetEntityID: UniqueIdentifier, ptpPortIndex: UInt16) async throws -> PtpPortIntervals {
+    guard case let .getPtpPortRemoteIntervals(_, _, value) = try await _aem(targetEntityID, .getPtpPortRemoteIntervals(
+      descriptorType: .ptpPort, descriptorIndex: ptpPortIndex
+    )) else { throw AemStatus.protocolError }
+    return value
+  }
+
+  /// SET_PTP_PORT_OVERRIDES (IEEE 1722.1-2021 §7.4.96); `overrides.flags` names the fields to set.
+  @discardableResult
+  func setPtpPortOverrides(
+    id targetEntityID: UniqueIdentifier, ptpPortIndex: UInt16, to overrides: PtpPortOverrides
+  ) async throws -> PtpPortOverrides {
+    guard case let .setPtpPortOverrides(_, _, overrides) = try await _aem(targetEntityID, .setPtpPortOverrides(
+      descriptorType: .ptpPort, descriptorIndex: ptpPortIndex, overrides: overrides
+    )) else { throw AemStatus.protocolError }
+    return overrides
+  }
+
+  func getPtpPortOverrides(id targetEntityID: UniqueIdentifier, ptpPortIndex: UInt16) async throws -> PtpPortOverrides {
+    guard case let .getPtpPortOverrides(_, _, value) = try await _aem(targetEntityID, .getPtpPortOverrides(
+      descriptorType: .ptpPort, descriptorIndex: ptpPortIndex
+    )) else { throw AemStatus.protocolError }
+    return value
+  }
+
+  func getPtpPortPdelayMonCount(id targetEntityID: UniqueIdentifier, ptpPortIndex: UInt16) async throws -> PtpPerfMonCounts {
+    guard case let .getPtpPortPdelayMonCount(_, _, value) = try await _aem(targetEntityID, .getPtpPortPdelayMonCount(
+      descriptorType: .ptpPort, descriptorIndex: ptpPortIndex
+    )) else { throw AemStatus.protocolError }
+    return value
+  }
+
+  func getPtpPortPdelayMonRecord(id targetEntityID: UniqueIdentifier, ptpPortIndex: UInt16, recordIndex: UInt16) async throws -> PtpPortPdelayMonRecord {
+    guard case let .getPtpPortPdelayMonRecord(_, _, value) = try await _aem(targetEntityID, .getPtpPortPdelayMonRecord(
+      descriptorType: .ptpPort, descriptorIndex: ptpPortIndex, recordIndex: recordIndex
+    )) else { throw AemStatus.protocolError }
+    return value
+  }
+
+  func getPtpPortPerfMonCount(id targetEntityID: UniqueIdentifier, ptpPortIndex: UInt16) async throws -> PtpPerfMonCounts {
+    guard case let .getPtpPortPerfMonCount(_, _, value) = try await _aem(targetEntityID, .getPtpPortPerfMonCount(
+      descriptorType: .ptpPort, descriptorIndex: ptpPortIndex
+    )) else { throw AemStatus.protocolError }
+    return value
+  }
+
+  func getPtpPortPerfMonRecord(id targetEntityID: UniqueIdentifier, ptpPortIndex: UInt16, recordIndex: UInt16) async throws -> PtpPortPerfMonRecord {
+    guard case let .getPtpPortPerfMonRecord(_, _, value) = try await _aem(targetEntityID, .getPtpPortPerfMonRecord(
+      descriptorType: .ptpPort, descriptorIndex: ptpPortIndex, recordIndex: recordIndex
+    )) else { throw AemStatus.protocolError }
+    return value
+  }
+
+  // MARK: Video and sensor formats
 
   /// SET_VIDEO_FORMAT (IEEE 1722.1-2021 §7.4.11) on a VIDEO_CLUSTER.
   @discardableResult

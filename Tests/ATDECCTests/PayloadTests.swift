@@ -548,6 +548,145 @@ final class PayloadTests: XCTestCase {
     ).serialized())
   }
 
+  // Figures 7-99 to 7-113: flag bits are numbered MSB first, so bit 15 is the least significant
+  func testPtpInstancePayloads() throws {
+    let instance = be16(DescriptorType.ptpInstance.rawValue) + be16(0)
+    // cv, tt, so and ie; the grandmaster's gm_cv and gm_pt
+    let body = [248, 0xFE] + be16(0x436A) + [246, 248, 0, 0xA0] + be16(37) + be16(0x0100 | 0x20 | 0x04 | 0x01) +
+      be64(0x0011_22FF_FE33_4455) + [6, 0x21] + be16(0x4E5D) + [1, 2, 0x20, 0x21] + be16(37) + be16(0)
+    guard case let .getPtpInstanceInfo(_, _, info) = try AemResponsePayload(
+      commandTypeRaw: AemCommandType.getPtpInstanceInfo.rawValue,
+      data: instance + body
+    ) else { return XCTFail("expected GET_PTP_INSTANCE_INFO") }
+    XCTAssertEqual(info.clockQuality, PtpClockQuality(clockClass: 248, clockAccuracy: 0xFE, offsetScaledLogVariance: 0x436A))
+    XCTAssertEqual(info.priority1, 246)
+    XCTAssertEqual(info.currentUtcOffset, 37)
+    XCTAssertEqual(info.timeProperties, [.currentUtcOffsetValid, .timeTraceable])
+    XCTAssertEqual(info.state, [.slaveOnly, .instanceEnabled])
+    XCTAssertEqual(info.grandmaster.clockIdentity, UniqueIdentifier(0x0011_22FF_FE33_4455))
+    XCTAssertEqual(info.grandmaster.timeSource, 0x20)
+    XCTAssertEqual(info.grandmaster.timeProperties, [.currentUtcOffsetValid, .ptpTimescale])
+
+    // parent, cumulative_rate_ratio, valid_flags, gm_timebase_indicator, two ScaledNs, five quadlets
+    let extended = body + be64(0x0011_22FF_FE66_7788) + be16(1) + be16(2) + be32(UInt32(bitPattern: -5)) +
+      be16(0x0001) + be16(3) + be32(0xFFFF_FFFF) + be64(0xFFFF_FFFF_FFFF_0000) + [UInt8](repeating: 0, count: 12) +
+      be32(7) + be32(8) + be32(9) + be32(10) + be32(11)
+    XCTAssertEqual(extended.count, 96) // 100 octets with descriptor_type and descriptor_index
+    guard case let .getPtpInstanceExtendedInfo(_, _, extendedInfo) = try AemResponsePayload(
+      commandTypeRaw: AemCommandType.getPtpInstanceExtendedInfo.rawValue,
+      data: instance + extended
+    ) else { return XCTFail("expected GET_PTP_INSTANCE_EXTENDED_INFO") }
+    XCTAssertEqual(extendedInfo.info, info)
+    XCTAssertEqual(extendedInfo.stepsRemoved, 2)
+    XCTAssertEqual(extendedInfo.cumulativeRateRatio, -5)
+    XCTAssertEqual(extendedInfo.valid, .offsetFromMaster)
+    XCTAssertEqual(extendedInfo.offsetFromMaster.nanoseconds, -1)
+    XCTAssertEqual(extendedInfo.lastGmFreqChange, 7)
+    XCTAssertEqual(extendedInfo.timeOfLastGmFreqChange, 11)
+    XCTAssertThrowsError(try AemResponsePayload(
+      commandTypeRaw: AemCommandType.getPtpInstanceExtendedInfo.rawValue,
+      data: instance + extended.dropLast()
+    ))
+
+    let settings = PtpInstanceSettings(flags: [.priority1, .slaveOnly], priority1: 200, state: .slaveOnly)
+    let set = AemCommandPayload.setPtpInstanceInfo(descriptorType: .ptpInstance, descriptorIndex: 0, settings: settings)
+    let setBytes = try set.serialized()
+    XCTAssertEqual(setBytes, instance + be16(0) + be16(0x0104) + [200, 0, 0, 0x04])
+    XCTAssertEqual(try AemCommandPayload(commandTypeRaw: set.commandTypeRaw, data: setBytes), set)
+
+    let pathTrace = AemCommandPayload.getPtpInstancePathTrace(descriptorType: .ptpInstance, descriptorIndex: 0, startIndex: 1)
+    XCTAssertEqual(try pathTrace.serialized(), instance + be16(1) + be16(0))
+    let traceBytes = instance + be16(1) + be16(2) + be64(0xA) + be64(0xB)
+    guard case .getPtpInstancePathTrace(_, _, 1, [UniqueIdentifier(0xA), UniqueIdentifier(0xB)]) = try AemResponsePayload(
+      commandTypeRaw: AemCommandType.getPtpInstancePathTrace.rawValue,
+      data: traceBytes
+    ) else { return XCTFail("expected GET_PTP_INSTANCE_PATH_TRACE") }
+    XCTAssertThrowsError(try AemResponsePayload(
+      commandTypeRaw: AemCommandType.getPtpInstancePathTrace.rawValue,
+      data: Array(traceBytes.dropLast())
+    ))
+    guard case .getPtpInstancePathCount(_, _, 4) = try AemResponsePayload(
+      commandTypeRaw: AemCommandType.getPtpInstancePathCount.rawValue,
+      data: instance + be16(0) + be16(4)
+    ) else { return XCTFail("expected GET_PTP_INSTANCE_PATH_COUNT") }
+
+    // record_index, flags (MEASUREMENT_VALID and MASTER_SLAVE_DELAY_VALID), timestamp, 16 octlets
+    var record = instance + be16(3) + be16(0x0005) + be64(1000)
+    for value in 0..<UInt64(16) {
+      record += be64(value)
+    }
+    guard case let .getPtpInstancePerfMonRecord(_, _, perfMon) = try AemResponsePayload(
+      commandTypeRaw: AemCommandType.getPtpInstancePerfMonRecord.rawValue,
+      data: record
+    ) else { return XCTFail("expected GET_PTP_INSTANCE_PERF_MON_RECORD") }
+    XCTAssertEqual(perfMon.recordIndex, 3)
+    XCTAssertEqual(perfMon.flags, [.measurementValid, .masterSlaveDelayValid])
+    XCTAssertEqual(perfMon.timestamp, 1000)
+    XCTAssertEqual(perfMon.slaveMasterDelay.average, 4)
+    XCTAssertEqual(perfMon.offsetFromMaster.standardDeviation, 15)
+  }
+
+  // Figures 7-114 to 7-135
+  func testPtpPortPayloads() throws {
+    let port = be16(DescriptorType.ptpPort.rawValue) + be16(1)
+    let intervals = PtpPortIntervals(flags: [.announce, .gptpCapable], logSyncInterval: -3, logGptpCapableInterval: 3)
+    let setIntervals = AemCommandPayload.setPtpPortInitialIntervals(
+      descriptorType: .ptpPort,
+      descriptorIndex: 1,
+      intervals: intervals
+    )
+    let intervalBytes = try setIntervals.serialized()
+    XCTAssertEqual(intervalBytes, port + be16(0) + be16(0x0009) + [0x00, 0xFD, 0x00, 0x03])
+    XCTAssertEqual(try AemCommandPayload(commandTypeRaw: setIntervals.commandTypeRaw, data: intervalBytes), setIntervals)
+    guard case .getPtpPortCurrentIntervals(_, 1, intervals) = try AemResponsePayload(
+      commandTypeRaw: AemCommandType.getPtpPortCurrentIntervals.rawValue,
+      data: intervalBytes
+    ) else { return XCTFail("expected GET_PTP_PORT_CURRENT_INTERVALS") }
+
+    let overrides = PtpPortOverrides(
+      flags: [.syncInterval, .desiredState],
+      booleans: [.useSyncInterval, .computeMeanLinkDelay],
+      logSyncInterval: -3,
+      desiredState: 9
+    )
+    let setOverrides = AemCommandPayload.setPtpPortOverrides(descriptorType: .ptpPort, descriptorIndex: 1, overrides: overrides)
+    let overrideBytes = try setOverrides.serialized()
+    XCTAssertEqual(overrideBytes, port + be16(0x0082) + be16(0x0202) + [0, 0xFD, 0, 0, 9, 0] + be16(0))
+    XCTAssertEqual(try AemCommandPayload(commandTypeRaw: setOverrides.commandTypeRaw, data: overrideBytes), setOverrides)
+
+    guard case let .getPtpPortPdelayMonCount(_, _, counts) = try AemResponsePayload(
+      commandTypeRaw: AemCommandType.getPtpPortPdelayMonCount.rawValue,
+      data: port + be16(96) + be16(10) + be16(97) + be16(3)
+    ) else { return XCTFail("expected GET_PTP_PORT_PDELAY_MON_COUNT") }
+    XCTAssertEqual(counts.maxCountOf24h, 96)
+    XCTAssertEqual(counts.maxCountOf15m, 97)
+    XCTAssertEqual(counts.countOf15m, 3)
+
+    var record = port + be16(0) + be16(0x0003) + be64(5)
+    for value in 0..<UInt32(17) {
+      record += be32(value)
+    }
+    guard case let .getPtpPortPerfMonRecord(_, _, perfMon) = try AemResponsePayload(
+      commandTypeRaw: AemCommandType.getPtpPortPerfMonRecord.rawValue,
+      data: record
+    ) else { return XCTFail("expected GET_PTP_PORT_PERF_MON_RECORD") }
+    XCTAssertEqual(perfMon.flags, [.measurementValid, .periodComplete])
+    XCTAssertEqual(perfMon.syncRx, 4)
+    XCTAssertEqual(perfMon.pdelayRespFollowUpRx, 16)
+
+    let pdelayRecord = port + be16(2) + be16(0x0001) + be64(5) + be64(10) + be64(9) + be64(11) + be64(1)
+    guard case let .getPtpPortPdelayMonRecord(_, _, pdelay) = try AemResponsePayload(
+      commandTypeRaw: AemCommandType.getPtpPortPdelayMonRecord.rawValue,
+      data: pdelayRecord
+    ) else { return XCTFail("expected GET_PTP_PORT_PDELAY_MON_RECORD") }
+    XCTAssertEqual(pdelay.meanLinkDelay.maximum, 11)
+    XCTAssertEqual(try AemCommandPayload.getPtpPortPdelayMonRecord(
+      descriptorType: .ptpPort,
+      descriptorIndex: 1,
+      recordIndex: 2
+    ).serialized(), port + be16(2) + be16(0))
+  }
+
   // Figure 7-32: WRITE_DESCRIPTOR carries a whole descriptor, as READ_DESCRIPTOR's response does
   func testWriteDescriptorPayload() throws {
     let block = be16(DescriptorType.controlBlock.rawValue) + be16(2) + fixedString("Block") + be16(0xFFFF) +

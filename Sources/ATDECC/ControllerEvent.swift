@@ -84,6 +84,9 @@ public enum ControllerEvent: Sendable {
   case mixerValuesChanged(UniqueIdentifier, mixerIndex: UInt16, packedValues: [UInt8])
   /// `packedValues` is laid out as the MATRIX descriptor's control_value_type describes.
   case matrixValuesChanged(UniqueIdentifier, matrixIndex: UInt16, subregion: MatrixSubregion, packedValues: [UInt8])
+  case ptpInstanceSettingsChanged(UniqueIdentifier, ptpInstanceIndex: UInt16, settings: PtpInstanceSettings)
+  case ptpPortInitialIntervalsChanged(UniqueIdentifier, ptpPortIndex: UInt16, intervals: PtpPortIntervals)
+  case ptpPortOverridesChanged(UniqueIdentifier, ptpPortIndex: UInt16, overrides: PtpPortOverrides)
   /// A descriptor another controller wrote (IEEE 1722.1-2021 §7.4.6).
   case descriptorWritten(UniqueIdentifier, configurationIndex: UInt16, descriptorIndex: UInt16, descriptor: Descriptor)
 
@@ -180,7 +183,8 @@ public extension ControllerEvent {
          let .streamPortVideoMappingsRemoved(id, _, _, _), let .streamPortSensorMappingsChanged(id, _, _, _),
          let .streamPortSensorMappingsAdded(id, _, _, _), let .streamPortSensorMappingsRemoved(id, _, _, _),
          let .signalSelectorChanged(id, _, _), let .mixerValuesChanged(id, _, _),
-         let .matrixValuesChanged(id, _, _, _):
+         let .matrixValuesChanged(id, _, _, _), let .ptpInstanceSettingsChanged(id, _, _),
+         let .ptpPortInitialIntervalsChanged(id, _, _), let .ptpPortOverridesChanged(id, _, _):
       id
     case let .entityNameChanged(id, _), let .entityGroupNameChanged(id, _),
          let .descriptorNameChanged(id, _, _, _, _):

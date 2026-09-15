@@ -170,6 +170,26 @@ public enum AemCommandPayload: Sendable, Hashable {
     values: [UInt8]
   )
   case getMatrix(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, subregion: MatrixSubregion)
+  /// PTP_INSTANCE and PTP_PORT commands (IEEE 1722.1-2021 §7.4.81 to §7.4.101).
+  case setPtpInstanceInfo(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, settings: PtpInstanceSettings)
+  case setPtpPortInitialIntervals(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, intervals: PtpPortIntervals)
+  case setPtpPortRemoteIntervals(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, intervals: PtpPortIntervals)
+  case setPtpPortOverrides(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, overrides: PtpPortOverrides)
+  case getPtpInstanceInfo(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case getPtpInstanceExtendedInfo(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case getPtpInstanceGrandmasterInfo(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case getPtpInstancePathCount(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case getPtpInstancePerfMonCount(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case getPtpPortInitialIntervals(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case getPtpPortCurrentIntervals(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case getPtpPortRemoteIntervals(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case getPtpPortOverrides(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case getPtpPortPdelayMonCount(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case getPtpPortPerfMonCount(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case getPtpInstancePathTrace(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, startIndex: UInt16)
+  case getPtpInstancePerfMonRecord(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, recordIndex: UInt16)
+  case getPtpPortPdelayMonRecord(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, recordIndex: UInt16)
+  case getPtpPortPerfMonRecord(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, recordIndex: UInt16)
   /// Fixed-size GET commands answered together (IEEE 1722.1-2021 §7.4.76).
   case getDynamicInfo(commands: [AemCommandPayload])
   /// A command without a dedicated model.
@@ -241,6 +261,25 @@ public enum AemCommandPayload: Sendable, Hashable {
     case .getMixer: AemCommandType.getMixer.rawValue
     case .setMatrix: AemCommandType.setMatrix.rawValue
     case .getMatrix: AemCommandType.getMatrix.rawValue
+    case .setPtpInstanceInfo: AemCommandType.setPtpInstanceInfo.rawValue
+    case .setPtpPortInitialIntervals: AemCommandType.setPtpPortInitialIntervals.rawValue
+    case .setPtpPortRemoteIntervals: AemCommandType.setPtpPortRemoteIntervals.rawValue
+    case .setPtpPortOverrides: AemCommandType.setPtpPortOverrides.rawValue
+    case .getPtpInstanceInfo: AemCommandType.getPtpInstanceInfo.rawValue
+    case .getPtpInstanceExtendedInfo: AemCommandType.getPtpInstanceExtendedInfo.rawValue
+    case .getPtpInstanceGrandmasterInfo: AemCommandType.getPtpInstanceGrandmasterInfo.rawValue
+    case .getPtpInstancePathCount: AemCommandType.getPtpInstancePathCount.rawValue
+    case .getPtpInstancePerfMonCount: AemCommandType.getPtpInstancePerfMonCount.rawValue
+    case .getPtpPortInitialIntervals: AemCommandType.getPtpPortInitialIntervals.rawValue
+    case .getPtpPortCurrentIntervals: AemCommandType.getPtpPortCurrentIntervals.rawValue
+    case .getPtpPortRemoteIntervals: AemCommandType.getPtpPortRemoteIntervals.rawValue
+    case .getPtpPortOverrides: AemCommandType.getPtpPortOverrides.rawValue
+    case .getPtpPortPdelayMonCount: AemCommandType.getPtpPortPdelayMonCount.rawValue
+    case .getPtpPortPerfMonCount: AemCommandType.getPtpPortPerfMonCount.rawValue
+    case .getPtpInstancePathTrace: AemCommandType.getPtpInstancePathTrace.rawValue
+    case .getPtpInstancePerfMonRecord: AemCommandType.getPtpInstancePerfMonRecord.rawValue
+    case .getPtpPortPdelayMonRecord: AemCommandType.getPtpPortPdelayMonRecord.rawValue
+    case .getPtpPortPerfMonRecord: AemCommandType.getPtpPortPerfMonRecord.rawValue
     case .getDynamicInfo: AemCommandType.getDynamicInfo.rawValue
     case let .other(commandType, _): commandType
     }
@@ -299,7 +338,18 @@ public enum AemCommandPayload: Sendable, Hashable {
          let .getVideoFormat(descriptorType, descriptorIndex),
          let .getSensorFormat(descriptorType, descriptorIndex),
          let .getSignalSelector(descriptorType, descriptorIndex),
-         let .getMixer(descriptorType, descriptorIndex):
+         let .getMixer(descriptorType, descriptorIndex),
+         let .getPtpInstanceInfo(descriptorType, descriptorIndex),
+         let .getPtpInstanceExtendedInfo(descriptorType, descriptorIndex),
+         let .getPtpInstanceGrandmasterInfo(descriptorType, descriptorIndex),
+         let .getPtpInstancePathCount(descriptorType, descriptorIndex),
+         let .getPtpInstancePerfMonCount(descriptorType, descriptorIndex),
+         let .getPtpPortInitialIntervals(descriptorType, descriptorIndex),
+         let .getPtpPortCurrentIntervals(descriptorType, descriptorIndex),
+         let .getPtpPortRemoteIntervals(descriptorType, descriptorIndex),
+         let .getPtpPortOverrides(descriptorType, descriptorIndex),
+         let .getPtpPortPdelayMonCount(descriptorType, descriptorIndex),
+         let .getPtpPortPerfMonCount(descriptorType, descriptorIndex):
       try context.serialize(descriptorType)
       context.serialize(uint16: descriptorIndex)
     case let .setStreamInfo(descriptorType, descriptorIndex, streamInfo):
@@ -421,6 +471,30 @@ public enum AemCommandPayload: Sendable, Hashable {
       try context.serialize(descriptorType)
       context.serialize(uint16: descriptorIndex)
       try subregion.serialize(into: &context, repeats: false)
+    case let .setPtpInstanceInfo(descriptorType, descriptorIndex, settings):
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      settings.serialize(into: &context)
+    case let .setPtpPortInitialIntervals(descriptorType, descriptorIndex, intervals):
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      intervals.serialize(into: &context)
+    case let .setPtpPortRemoteIntervals(descriptorType, descriptorIndex, intervals):
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      intervals.serialize(into: &context)
+    case let .setPtpPortOverrides(descriptorType, descriptorIndex, overrides):
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      overrides.serialize(into: &context)
+    case let .getPtpInstancePathTrace(descriptorType, descriptorIndex, index),
+         let .getPtpInstancePerfMonRecord(descriptorType, descriptorIndex, index),
+         let .getPtpPortPdelayMonRecord(descriptorType, descriptorIndex, index),
+         let .getPtpPortPerfMonRecord(descriptorType, descriptorIndex, index):
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      context.serialize(uint16: index)
+      context.serialize(uint16: 0) // reserved
     case let .getDynamicInfo(commands):
       for command in commands {
         let data = try command.serialized()
@@ -736,6 +810,63 @@ public enum AemCommandPayload: Sendable, Hashable {
           descriptorIndex: descriptorIndex,
           subregion: MatrixSubregion(parsing: &input, repeats: false)
         )
+      case .setPtpInstanceInfo:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setPtpInstanceInfo(descriptorType: descriptorType, descriptorIndex: descriptorIndex, settings: PtpInstanceSettings(parsing: &input))
+      case .setPtpPortInitialIntervals:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setPtpPortInitialIntervals(descriptorType: descriptorType, descriptorIndex: descriptorIndex, intervals: PtpPortIntervals(parsing: &input))
+      case .setPtpPortRemoteIntervals:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setPtpPortRemoteIntervals(descriptorType: descriptorType, descriptorIndex: descriptorIndex, intervals: PtpPortIntervals(parsing: &input))
+      case .setPtpPortOverrides:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setPtpPortOverrides(descriptorType: descriptorType, descriptorIndex: descriptorIndex, overrides: PtpPortOverrides(parsing: &input))
+      case .getPtpInstanceInfo:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getPtpInstanceInfo(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .getPtpInstanceExtendedInfo:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getPtpInstanceExtendedInfo(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .getPtpInstanceGrandmasterInfo:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getPtpInstanceGrandmasterInfo(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .getPtpInstancePathCount:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getPtpInstancePathCount(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .getPtpInstancePerfMonCount:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getPtpInstancePerfMonCount(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .getPtpPortInitialIntervals:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getPtpPortInitialIntervals(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .getPtpPortCurrentIntervals:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getPtpPortCurrentIntervals(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .getPtpPortRemoteIntervals:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getPtpPortRemoteIntervals(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .getPtpPortOverrides:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getPtpPortOverrides(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .getPtpPortPdelayMonCount:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getPtpPortPdelayMonCount(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .getPtpPortPerfMonCount:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getPtpPortPerfMonCount(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .getPtpInstancePathTrace:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpInstancePathTrace(descriptorType: descriptorType, descriptorIndex: descriptorIndex, startIndex: UInt16(parsingBigEndian: &input))
+      case .getPtpInstancePerfMonRecord:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpInstancePerfMonRecord(descriptorType: descriptorType, descriptorIndex: descriptorIndex, recordIndex: UInt16(parsingBigEndian: &input))
+      case .getPtpPortPdelayMonRecord:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpPortPdelayMonRecord(descriptorType: descriptorType, descriptorIndex: descriptorIndex, recordIndex: UInt16(parsingBigEndian: &input))
+      case .getPtpPortPerfMonRecord:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpPortPerfMonRecord(descriptorType: descriptorType, descriptorIndex: descriptorIndex, recordIndex: UInt16(parsingBigEndian: &input))
       case .getDynamicInfo:
         return try .getDynamicInfo(commands: _parseDynamicInfos(&input).map {
           try AemCommandPayload(commandTypeRaw: $0.commandTypeRaw, data: $0.data)
@@ -956,6 +1087,26 @@ public enum AemResponsePayload: Sendable, Hashable {
     subregion: MatrixSubregion,
     values: [UInt8]
   )
+  case setPtpInstanceInfo(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, settings: PtpInstanceSettings)
+  case getPtpInstanceInfo(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, info: PtpInstanceInfo)
+  case getPtpInstanceExtendedInfo(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, info: PtpInstanceExtendedInfo)
+  case getPtpInstanceGrandmasterInfo(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, info: PtpGrandmasterInfo)
+  case getPtpInstancePerfMonCount(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, counts: PtpPerfMonCounts)
+  case getPtpInstancePerfMonRecord(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, record: PtpInstancePerfMonRecord)
+  case setPtpPortInitialIntervals(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, intervals: PtpPortIntervals)
+  case getPtpPortInitialIntervals(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, intervals: PtpPortIntervals)
+  case getPtpPortCurrentIntervals(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, intervals: PtpPortIntervals)
+  case setPtpPortRemoteIntervals(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, intervals: PtpPortIntervals)
+  case getPtpPortRemoteIntervals(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, intervals: PtpPortIntervals)
+  case setPtpPortOverrides(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, overrides: PtpPortOverrides)
+  case getPtpPortOverrides(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, overrides: PtpPortOverrides)
+  case getPtpPortPdelayMonCount(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, counts: PtpPerfMonCounts)
+  case getPtpPortPdelayMonRecord(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, record: PtpPortPdelayMonRecord)
+  case getPtpPortPerfMonCount(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, counts: PtpPerfMonCounts)
+  case getPtpPortPerfMonRecord(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, record: PtpPortPerfMonRecord)
+  case getPtpInstancePathCount(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, traceCount: UInt16)
+  /// ClockIdentities of pathTraceDS.list from `startIndex`, as many as fit in the response.
+  case getPtpInstancePathTrace(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, startIndex: UInt16, pathTrace: [UniqueIdentifier])
   case getDynamicInfo([DynamicInfo])
   /// A response without a dedicated model.
   case other(commandType: UInt16, data: [UInt8])
@@ -1330,6 +1481,75 @@ public enum AemResponsePayload: Sendable, Hashable {
         return commandTypeRaw == AemCommandType.setMatrix.rawValue
           ? .setMatrix(descriptorType: descriptorType, descriptorIndex: descriptorIndex, subregion: subregion, values: values)
           : .getMatrix(descriptorType: descriptorType, descriptorIndex: descriptorIndex, subregion: subregion, values: values)
+      case .setPtpInstanceInfo:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setPtpInstanceInfo(descriptorType: descriptorType, descriptorIndex: descriptorIndex, settings: PtpInstanceSettings(parsing: &input))
+      case .getPtpInstanceInfo:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpInstanceInfo(descriptorType: descriptorType, descriptorIndex: descriptorIndex, info: PtpInstanceInfo(parsing: &input))
+      case .getPtpInstanceExtendedInfo:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpInstanceExtendedInfo(descriptorType: descriptorType, descriptorIndex: descriptorIndex, info: PtpInstanceExtendedInfo(parsing: &input))
+      case .getPtpInstanceGrandmasterInfo:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpInstanceGrandmasterInfo(descriptorType: descriptorType, descriptorIndex: descriptorIndex, info: PtpGrandmasterInfo(parsing: &input))
+      case .getPtpInstancePerfMonCount:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpInstancePerfMonCount(descriptorType: descriptorType, descriptorIndex: descriptorIndex, counts: PtpPerfMonCounts(parsing: &input))
+      case .getPtpInstancePerfMonRecord:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpInstancePerfMonRecord(descriptorType: descriptorType, descriptorIndex: descriptorIndex, record: PtpInstancePerfMonRecord(parsing: &input))
+      case .setPtpPortInitialIntervals:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setPtpPortInitialIntervals(descriptorType: descriptorType, descriptorIndex: descriptorIndex, intervals: PtpPortIntervals(parsing: &input))
+      case .getPtpPortInitialIntervals:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpPortInitialIntervals(descriptorType: descriptorType, descriptorIndex: descriptorIndex, intervals: PtpPortIntervals(parsing: &input))
+      case .getPtpPortCurrentIntervals:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpPortCurrentIntervals(descriptorType: descriptorType, descriptorIndex: descriptorIndex, intervals: PtpPortIntervals(parsing: &input))
+      case .setPtpPortRemoteIntervals:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setPtpPortRemoteIntervals(descriptorType: descriptorType, descriptorIndex: descriptorIndex, intervals: PtpPortIntervals(parsing: &input))
+      case .getPtpPortRemoteIntervals:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpPortRemoteIntervals(descriptorType: descriptorType, descriptorIndex: descriptorIndex, intervals: PtpPortIntervals(parsing: &input))
+      case .setPtpPortOverrides:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setPtpPortOverrides(descriptorType: descriptorType, descriptorIndex: descriptorIndex, overrides: PtpPortOverrides(parsing: &input))
+      case .getPtpPortOverrides:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpPortOverrides(descriptorType: descriptorType, descriptorIndex: descriptorIndex, overrides: PtpPortOverrides(parsing: &input))
+      case .getPtpPortPdelayMonCount:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpPortPdelayMonCount(descriptorType: descriptorType, descriptorIndex: descriptorIndex, counts: PtpPerfMonCounts(parsing: &input))
+      case .getPtpPortPdelayMonRecord:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpPortPdelayMonRecord(descriptorType: descriptorType, descriptorIndex: descriptorIndex, record: PtpPortPdelayMonRecord(parsing: &input))
+      case .getPtpPortPerfMonCount:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpPortPerfMonCount(descriptorType: descriptorType, descriptorIndex: descriptorIndex, counts: PtpPerfMonCounts(parsing: &input))
+      case .getPtpPortPerfMonRecord:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getPtpPortPerfMonRecord(descriptorType: descriptorType, descriptorIndex: descriptorIndex, record: PtpPortPerfMonRecord(parsing: &input))
+      case .getPtpInstancePathCount:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        _ = try UInt16(parsingBigEndian: &input) // reserved
+        return try .getPtpInstancePathCount(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          traceCount: UInt16(parsingBigEndian: &input)
+        )
+      case .getPtpInstancePathTrace:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        let startIndex = try UInt16(parsingBigEndian: &input)
+        let entryCount = try UInt16(parsingBigEndian: &input)
+        return try .getPtpInstancePathTrace(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          startIndex: startIndex,
+          pathTrace: _parseMappingArray(&input, count: entryCount, length: 8) { try UniqueIdentifier(parsing: &$0) }
+        )
       case .getDynamicInfo:
         return try .getDynamicInfo(_parseDynamicInfos(&input).map {
           DynamicInfo(commandTypeRaw: $0.commandTypeRaw, statusRaw: $0.statusRaw, data: $0.data)

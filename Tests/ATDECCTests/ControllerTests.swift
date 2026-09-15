@@ -819,6 +819,28 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  func testPtpSettingsAndUnsolicitedOverrides() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    let settings = PtpInstanceSettings(flags: .domainNumber, domainNumber: 1)
+    let applied = try await controller.setPtpInstanceInfo(id: entityID, ptpInstanceIndex: 0, to: settings)
+    XCTAssertEqual(applied, settings)
+
+    try await entity.sendUnsolicited(
+      .setPtpPortOverrides,
+      data: be16(DescriptorType.ptpPort.rawValue) + be16(1) + be16(0x0080) + be16(0) + [0, 0, 0, 0, 9, 0] + be16(0)
+    )
+    let changed = await first(events) {
+      if case .ptpPortOverridesChanged(entityID, ptpPortIndex: 1, overrides: let overrides) = $0 {
+        overrides.desiredState == 9 && overrides.flags == .desiredState
+      } else {
+        false
+      }
+    }
+    XCTAssertNotNil(changed)
+    await controller.close()
+  }
+
   func testUnsolicitedRebootIsReported() async throws {
     let controller = try await makeController()
     let events = await controller.events()
