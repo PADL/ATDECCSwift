@@ -774,6 +774,99 @@ extension PayloadTests {
     XCTAssertEqual(context.bytes, bytes)
   }
 
+  private func assertDescriptorRoundTrips(_ bytes: [UInt8], file: StaticString = #filePath, line: UInt = #line) throws {
+    let (_, _, descriptor) = try readDescriptorResponse(bytes)
+    if case .other = descriptor {
+      XCTFail("descriptor was not decoded", file: file, line: line)
+    }
+    var context = SerializationContext()
+    try descriptor.serialize(descriptorIndex: 0, into: &context)
+    XCTAssertEqual(context.bytes, bytes, file: file, line: line)
+  }
+
+  // IEEE 1722.1-2021 Table 7-7: SENSOR_UNIT's timing follows base_control_block
+  func testSensorUnitDescriptor() throws {
+    let counts = (0..<UInt16(33)).flatMap { be16($0) } // clock_domain_index to base_control_block
+    let body = fixedString("Sensor") + be16(0xFFFF) + counts
+    let short = be16(DescriptorType.sensorUnit.rawValue) + be16(0) + body
+    guard case let (_, _, .sensorUnit(unit)) = try readDescriptorResponse(short) else {
+      return XCTFail("expected SENSOR_UNIT")
+    }
+    XCTAssertNil(unit.timing)
+    XCTAssertEqual(unit.baseControlBlock, 32)
+    let bytes = short + be16(2)
+    guard case let (_, _, .sensorUnit(timed)) = try readDescriptorResponse(bytes) else {
+      return XCTFail("expected SENSOR_UNIT")
+    }
+    XCTAssertEqual(timed.timing, 2)
+    try assertDescriptorRoundTrips(bytes)
+  }
+
+  // IEEE 1722.1-2021 Table 7-29: six supported arrays following a 133-octet fixed part
+  func testVideoClusterDescriptor() throws {
+    var body = fixedString("Video 1") + be16(0xFFFF) + be16(DescriptorType.invalid.rawValue) + be16(0) + be16(0)
+    body += be32(10) + be32(20) + [0x01] + be32(0x11) // latencies, format, current_format_specific
+    body += be16(133) + be16(1) + be32(30) + be16(137) + be16(2) // format specifics, sampling rates
+    body += be16(0x0101) + be16(145) + be16(1) // aspect ratios
+    body += be32(0x0780_0438) + be16(147) + be16(1) // sizes
+    body += be16(3) + be16(151) + be16(1) // color spaces
+    body += be64(0x1E) + be16(153) + be16(1) // sampling rate ranges
+    body += be32(0x11) + be32(30) + be32(60) + be16(0x0101) + be32(0x0780_0438) + be16(3) + be64(0x1E)
+    let bytes = be16(DescriptorType.videoCluster.rawValue) + be16(0) + body
+    guard case let (_, _, .videoCluster(cluster)) = try readDescriptorResponse(bytes) else {
+      return XCTFail("expected VIDEO_CLUSTER")
+    }
+    XCTAssertEqual(cluster.supportedSamplingRates.map(\.rawValue), [30, 60])
+    XCTAssertEqual(cluster.supportedSizes, [0x0780_0438])
+    XCTAssertEqual(cluster.currentSamplingRateRange, 0x1E)
+    XCTAssertEqual(cluster.supportedSamplingRateRanges, [0x1E])
+    try assertDescriptorRoundTrips(bytes)
+  }
+
+  // IEEE 1722.1-2021 Tables 7-51 to 7-53: the combiner map's count precedes its offset
+  func testSignalCombinerDescriptor() throws {
+    var body = fixedString("Combiner") + be16(0xFFFF) + be32(1) + be32(2) + be16(0)
+    body += be16(1) + be16(88) + be16(94) + be16(2) // combiner_map count and offset, sources
+    body += be16(0) + be16(2) + be16(1) // sub_signal_start, sub_signal_count, input_index
+    body += be16(DescriptorType.audioCluster.rawValue) + be16(0) + be16(0)
+    body += be16(DescriptorType.audioCluster.rawValue) + be16(1) + be16(0)
+    let bytes = be16(DescriptorType.signalCombiner.rawValue) + be16(0) + body
+    guard case let (_, _, .signalCombiner(combiner)) = try readDescriptorResponse(bytes) else {
+      return XCTFail("expected SIGNAL_COMBINER")
+    }
+    XCTAssertEqual(combiner.combinerMap, [SubSignalMapping(subSignalStart: 0, subSignalCount: 2, index: 1)])
+    XCTAssertEqual(combiner.sources.map(\.signalIndex), [0, 1])
+    try assertDescriptorRoundTrips(bytes)
+  }
+
+  // IEEE 1722.1-2021 Table 7-42: sources, then the packed value
+  func testMixerDescriptor() throws {
+    var body = fixedString("Mixer") + be16(0xFFFF) + be32(1) + be32(2) + be16(0)
+    body += be16(ControlValueType(.linearUInt8).rawValue) + be16(88) + be16(1) + be16(94)
+    body += be16(DescriptorType.audioCluster.rawValue) + be16(0) + be16(0)
+    body += [0x00, 0xFF, 0x01, 0x80, 0x00] // minimum, maximum, step, default, current
+    let bytes = be16(DescriptorType.mixer.rawValue) + be16(0) + body
+    guard case let (_, _, .mixer(mixer)) = try readDescriptorResponse(bytes) else {
+      return XCTFail("expected MIXER")
+    }
+    XCTAssertEqual(mixer.controlValueType.kind, .linearUInt8)
+    XCTAssertEqual(mixer.sources.count, 1)
+    XCTAssertEqual(mixer.valuesData, [0x00, 0xFF, 0x01, 0x80, 0x00])
+    try assertDescriptorRoundTrips(bytes)
+  }
+
+  func testMatrixSignalAndControlBlockDescriptors() throws {
+    // Table 7-47: signals_count precedes signals_offset
+    let signals = be16(2) + be16(8) + be16(DescriptorType.audioCluster.rawValue) + be16(0) + be16(0) +
+      be16(DescriptorType.audioCluster.rawValue) + be16(1) + be16(0)
+    try assertDescriptorRoundTrips(be16(DescriptorType.matrixSignal.rawValue) + be16(0) + signals)
+
+    // Table 7-62
+    let block = fixedString("Block") + be16(0xFFFF) + be16(4) + be16(0) + be16(3) +
+      be16(DescriptorType.invalid.rawValue) + be16(0) + be16(0)
+    try assertDescriptorRoundTrips(be16(DescriptorType.controlBlock.rawValue) + be16(0) + block)
+  }
+
   func testAvbInterfaceDescriptorComparesEveryField() throws {
     var body = fixedString("AVB 1") + be16(0xFFFF) + [0x00, 0x1B, 0x92, 0x00, 0x00, 0x01] // mac_address
     body += be16(0x0007) + be64(0x001B_92FF_FE00_0001) // interface_flags, clock_identity

@@ -1480,6 +1480,1123 @@ public struct PtpPortDescriptor: Sendable, Hashable, CustomStringConvertible {
   }
 }
 
+// MARK: - Video, sensor and signal processing descriptors
+
+/// The output of a descriptor that a signal comes from or goes to (IEEE 1722.1-2021 Table 7-41).
+public struct SignalSource: Sendable, Hashable {
+  static let length = 6
+
+  public var signalType: DescriptorType
+  public var signalIndex: DescriptorIndex
+  public var signalOutput: UInt16
+
+  public init(signalType: DescriptorType, signalIndex: DescriptorIndex, signalOutput: UInt16) {
+    self.signalType = signalType
+    self.signalIndex = signalIndex
+    self.signalOutput = signalOutput
+  }
+
+  init(parsing input: inout ParserSpan) throws {
+    signalType = try DescriptorType(parsing: &input)
+    signalIndex = try UInt16(parsingBigEndian: &input)
+    signalOutput = try UInt16(parsingBigEndian: &input)
+  }
+
+  func serialize(into context: inout SerializationContext) throws {
+    try context.serialize(signalType)
+    context.serialize(uint16: signalIndex)
+    context.serialize(uint16: signalOutput)
+  }
+}
+
+/// A run of sub-signals and the output (of a splitter or demultiplexer) or input (of a combiner or
+/// multiplexer) it maps to (IEEE 1722.1-2021 Tables 7-50, 7-52, 7-55 and 7-57).
+public struct SubSignalMapping: Sendable, Hashable {
+  static let length = 6
+
+  public var subSignalStart: UInt16
+  public var subSignalCount: UInt16
+  public var index: UInt16
+
+  public init(subSignalStart: UInt16, subSignalCount: UInt16, index: UInt16) {
+    self.subSignalStart = subSignalStart
+    self.subSignalCount = subSignalCount
+    self.index = index
+  }
+
+  init(parsing input: inout ParserSpan) throws {
+    subSignalStart = try UInt16(parsingBigEndian: &input)
+    subSignalCount = try UInt16(parsingBigEndian: &input)
+    index = try UInt16(parsingBigEndian: &input)
+  }
+
+  func serialize(into context: inout SerializationContext) {
+    context.serialize(uint16: subSignalStart)
+    context.serialize(uint16: subSignalCount)
+    context.serialize(uint16: index)
+  }
+}
+
+/// VIDEO_UNIT descriptor (IEEE 1722.1-2021 Table 7-6).
+public struct VideoUnitDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 132
+
+  public var objectName: String
+  public var localizedDescription: LocalizedStringReference
+  public var clockDomainIndex: UInt16
+  public var numberOfStreamInputPorts: UInt16
+  public var baseStreamInputPort: UInt16
+  public var numberOfStreamOutputPorts: UInt16
+  public var baseStreamOutputPort: UInt16
+  public var numberOfExternalInputPorts: UInt16
+  public var baseExternalInputPort: UInt16
+  public var numberOfExternalOutputPorts: UInt16
+  public var baseExternalOutputPort: UInt16
+  public var numberOfInternalInputPorts: UInt16
+  public var baseInternalInputPort: UInt16
+  public var numberOfInternalOutputPorts: UInt16
+  public var baseInternalOutputPort: UInt16
+  public var numberOfControls: UInt16
+  public var baseControl: UInt16
+  public var numberOfSignalSelectors: UInt16
+  public var baseSignalSelector: UInt16
+  public var numberOfMixers: UInt16
+  public var baseMixer: UInt16
+  public var numberOfMatrices: UInt16
+  public var baseMatrix: UInt16
+  public var numberOfSplitters: UInt16
+  public var baseSplitter: UInt16
+  public var numberOfCombiners: UInt16
+  public var baseCombiner: UInt16
+  public var numberOfDemultiplexers: UInt16
+  public var baseDemultiplexer: UInt16
+  public var numberOfMultiplexers: UInt16
+  public var baseMultiplexer: UInt16
+  public var numberOfTranscoders: UInt16
+  public var baseTranscoder: UInt16
+  public var numberOfControlBlocks: UInt16
+  public var baseControlBlock: UInt16
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    objectName = try String(parsingAvdeccFixedString: &input)
+    localizedDescription = try LocalizedStringReference(parsing: &input)
+    clockDomainIndex = try UInt16(parsingBigEndian: &input)
+    numberOfStreamInputPorts = try UInt16(parsingBigEndian: &input)
+    baseStreamInputPort = try UInt16(parsingBigEndian: &input)
+    numberOfStreamOutputPorts = try UInt16(parsingBigEndian: &input)
+    baseStreamOutputPort = try UInt16(parsingBigEndian: &input)
+    numberOfExternalInputPorts = try UInt16(parsingBigEndian: &input)
+    baseExternalInputPort = try UInt16(parsingBigEndian: &input)
+    numberOfExternalOutputPorts = try UInt16(parsingBigEndian: &input)
+    baseExternalOutputPort = try UInt16(parsingBigEndian: &input)
+    numberOfInternalInputPorts = try UInt16(parsingBigEndian: &input)
+    baseInternalInputPort = try UInt16(parsingBigEndian: &input)
+    numberOfInternalOutputPorts = try UInt16(parsingBigEndian: &input)
+    baseInternalOutputPort = try UInt16(parsingBigEndian: &input)
+    numberOfControls = try UInt16(parsingBigEndian: &input)
+    baseControl = try UInt16(parsingBigEndian: &input)
+    numberOfSignalSelectors = try UInt16(parsingBigEndian: &input)
+    baseSignalSelector = try UInt16(parsingBigEndian: &input)
+    numberOfMixers = try UInt16(parsingBigEndian: &input)
+    baseMixer = try UInt16(parsingBigEndian: &input)
+    numberOfMatrices = try UInt16(parsingBigEndian: &input)
+    baseMatrix = try UInt16(parsingBigEndian: &input)
+    numberOfSplitters = try UInt16(parsingBigEndian: &input)
+    baseSplitter = try UInt16(parsingBigEndian: &input)
+    numberOfCombiners = try UInt16(parsingBigEndian: &input)
+    baseCombiner = try UInt16(parsingBigEndian: &input)
+    numberOfDemultiplexers = try UInt16(parsingBigEndian: &input)
+    baseDemultiplexer = try UInt16(parsingBigEndian: &input)
+    numberOfMultiplexers = try UInt16(parsingBigEndian: &input)
+    baseMultiplexer = try UInt16(parsingBigEndian: &input)
+    numberOfTranscoders = try UInt16(parsingBigEndian: &input)
+    baseTranscoder = try UInt16(parsingBigEndian: &input)
+    numberOfControlBlocks = try UInt16(parsingBigEndian: &input)
+    baseControlBlock = try UInt16(parsingBigEndian: &input)
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    context.serialize(avdeccFixedString: objectName)
+    try context.serialize(localizedDescription)
+    for value in [
+      clockDomainIndex,
+      numberOfStreamInputPorts, baseStreamInputPort,
+      numberOfStreamOutputPorts, baseStreamOutputPort,
+      numberOfExternalInputPorts, baseExternalInputPort,
+      numberOfExternalOutputPorts, baseExternalOutputPort,
+      numberOfInternalInputPorts, baseInternalInputPort,
+      numberOfInternalOutputPorts, baseInternalOutputPort,
+      numberOfControls, baseControl,
+      numberOfSignalSelectors, baseSignalSelector,
+      numberOfMixers, baseMixer,
+      numberOfMatrices, baseMatrix,
+      numberOfSplitters, baseSplitter,
+      numberOfCombiners, baseCombiner,
+      numberOfDemultiplexers, baseDemultiplexer,
+      numberOfMultiplexers, baseMultiplexer,
+      numberOfTranscoders, baseTranscoder,
+      numberOfControlBlocks, baseControlBlock,
+    ] {
+      context.serialize(uint16: value)
+    }
+  }
+
+  public var description: String {
+    "VideoUnitDescriptor(name: \"\(objectName)\", clockDomain: \(clockDomainIndex))"
+  }
+}
+
+/// SENSOR_UNIT descriptor (IEEE 1722.1-2021 Table 7-7).
+public struct SensorUnitDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 132
+
+  public var objectName: String
+  public var localizedDescription: LocalizedStringReference
+  public var clockDomainIndex: UInt16
+  public var numberOfStreamInputPorts: UInt16
+  public var baseStreamInputPort: UInt16
+  public var numberOfStreamOutputPorts: UInt16
+  public var baseStreamOutputPort: UInt16
+  public var numberOfExternalInputPorts: UInt16
+  public var baseExternalInputPort: UInt16
+  public var numberOfExternalOutputPorts: UInt16
+  public var baseExternalOutputPort: UInt16
+  public var numberOfInternalInputPorts: UInt16
+  public var baseInternalInputPort: UInt16
+  public var numberOfInternalOutputPorts: UInt16
+  public var baseInternalOutputPort: UInt16
+  public var numberOfControls: UInt16
+  public var baseControl: UInt16
+  public var numberOfSignalSelectors: UInt16
+  public var baseSignalSelector: UInt16
+  public var numberOfMixers: UInt16
+  public var baseMixer: UInt16
+  public var numberOfMatrices: UInt16
+  public var baseMatrix: UInt16
+  public var numberOfSplitters: UInt16
+  public var baseSplitter: UInt16
+  public var numberOfCombiners: UInt16
+  public var baseCombiner: UInt16
+  public var numberOfDemultiplexers: UInt16
+  public var baseDemultiplexer: UInt16
+  public var numberOfMultiplexers: UInt16
+  public var baseMultiplexer: UInt16
+  public var numberOfTranscoders: UInt16
+  public var baseTranscoder: UInt16
+  public var numberOfControlBlocks: UInt16
+  public var baseControlBlock: UInt16
+  /// The TIMING descriptor that is the source of the unit's gPTP time; nil when the descriptor
+  /// has no timing field.
+  public var timing: DescriptorIndex?
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    objectName = try String(parsingAvdeccFixedString: &input)
+    localizedDescription = try LocalizedStringReference(parsing: &input)
+    clockDomainIndex = try UInt16(parsingBigEndian: &input)
+    numberOfStreamInputPorts = try UInt16(parsingBigEndian: &input)
+    baseStreamInputPort = try UInt16(parsingBigEndian: &input)
+    numberOfStreamOutputPorts = try UInt16(parsingBigEndian: &input)
+    baseStreamOutputPort = try UInt16(parsingBigEndian: &input)
+    numberOfExternalInputPorts = try UInt16(parsingBigEndian: &input)
+    baseExternalInputPort = try UInt16(parsingBigEndian: &input)
+    numberOfExternalOutputPorts = try UInt16(parsingBigEndian: &input)
+    baseExternalOutputPort = try UInt16(parsingBigEndian: &input)
+    numberOfInternalInputPorts = try UInt16(parsingBigEndian: &input)
+    baseInternalInputPort = try UInt16(parsingBigEndian: &input)
+    numberOfInternalOutputPorts = try UInt16(parsingBigEndian: &input)
+    baseInternalOutputPort = try UInt16(parsingBigEndian: &input)
+    numberOfControls = try UInt16(parsingBigEndian: &input)
+    baseControl = try UInt16(parsingBigEndian: &input)
+    numberOfSignalSelectors = try UInt16(parsingBigEndian: &input)
+    baseSignalSelector = try UInt16(parsingBigEndian: &input)
+    numberOfMixers = try UInt16(parsingBigEndian: &input)
+    baseMixer = try UInt16(parsingBigEndian: &input)
+    numberOfMatrices = try UInt16(parsingBigEndian: &input)
+    baseMatrix = try UInt16(parsingBigEndian: &input)
+    numberOfSplitters = try UInt16(parsingBigEndian: &input)
+    baseSplitter = try UInt16(parsingBigEndian: &input)
+    numberOfCombiners = try UInt16(parsingBigEndian: &input)
+    baseCombiner = try UInt16(parsingBigEndian: &input)
+    numberOfDemultiplexers = try UInt16(parsingBigEndian: &input)
+    baseDemultiplexer = try UInt16(parsingBigEndian: &input)
+    numberOfMultiplexers = try UInt16(parsingBigEndian: &input)
+    baseMultiplexer = try UInt16(parsingBigEndian: &input)
+    numberOfTranscoders = try UInt16(parsingBigEndian: &input)
+    baseTranscoder = try UInt16(parsingBigEndian: &input)
+    numberOfControlBlocks = try UInt16(parsingBigEndian: &input)
+    baseControlBlock = try UInt16(parsingBigEndian: &input)
+    timing = input.count >= MemoryLayout<UInt16>.size ? try UInt16(parsingBigEndian: &input) : nil
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    context.serialize(avdeccFixedString: objectName)
+    try context.serialize(localizedDescription)
+    for value in [
+      clockDomainIndex,
+      numberOfStreamInputPorts, baseStreamInputPort,
+      numberOfStreamOutputPorts, baseStreamOutputPort,
+      numberOfExternalInputPorts, baseExternalInputPort,
+      numberOfExternalOutputPorts, baseExternalOutputPort,
+      numberOfInternalInputPorts, baseInternalInputPort,
+      numberOfInternalOutputPorts, baseInternalOutputPort,
+      numberOfControls, baseControl,
+      numberOfSignalSelectors, baseSignalSelector,
+      numberOfMixers, baseMixer,
+      numberOfMatrices, baseMatrix,
+      numberOfSplitters, baseSplitter,
+      numberOfCombiners, baseCombiner,
+      numberOfDemultiplexers, baseDemultiplexer,
+      numberOfMultiplexers, baseMultiplexer,
+      numberOfTranscoders, baseTranscoder,
+      numberOfControlBlocks, baseControlBlock,
+    ] {
+      context.serialize(uint16: value)
+    }
+    if let timing {
+      context.serialize(uint16: timing)
+    }
+  }
+
+  public var description: String {
+    "SensorUnitDescriptor(name: \"\(objectName)\", clockDomain: \(clockDomainIndex))"
+  }
+}
+
+/// VIDEO_CLUSTER descriptor (IEEE 1722.1-2021 Table 7-29). The sampling rate range fields are
+/// absent from an IEEE 1722.1-2013 descriptor.
+public struct VideoClusterDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 117
+  // current_sampling_rate_range, and the offset and count of supported_sampling_rate_ranges
+  static let samplingRateRangeFieldsLength = 12
+
+  public var objectName: String
+  public var localizedDescription: LocalizedStringReference
+  public var signalType: DescriptorType
+  public var signalIndex: UInt16
+  public var signalOutput: UInt16
+  public var pathLatency: UInt32
+  public var blockLatency: UInt32
+  /// IEEE 1722.1-2021 Table 7-30.
+  public var format: UInt8
+  public var currentFormatSpecific: UInt32
+  public var supportedFormatSpecifics: [UInt32]
+  public var currentSamplingRate: SamplingRate
+  public var supportedSamplingRates: [SamplingRate]
+  public var currentAspectRatio: UInt16
+  public var supportedAspectRatios: [UInt16]
+  public var currentSize: UInt32
+  public var supportedSizes: [UInt32]
+  public var currentColorSpace: UInt16
+  public var supportedColorSpaces: [UInt16]
+  /// nil in an IEEE 1722.1-2013 descriptor.
+  public var currentSamplingRateRange: UInt64?
+  public var supportedSamplingRateRanges: [UInt64]
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    objectName = try String(parsingAvdeccFixedString: &input)
+    localizedDescription = try LocalizedStringReference(parsing: &input)
+    signalType = try DescriptorType(parsing: &input)
+    signalIndex = try UInt16(parsingBigEndian: &input)
+    signalOutput = try UInt16(parsingBigEndian: &input)
+    pathLatency = try UInt32(parsingBigEndian: &input)
+    blockLatency = try UInt32(parsingBigEndian: &input)
+    format = try UInt8(parsing: &input)
+    currentFormatSpecific = try UInt32(parsingBigEndian: &input)
+    let formatSpecificsOffset = try UInt16(parsingBigEndian: &input)
+    let formatSpecificsCount = try UInt16(parsingBigEndian: &input)
+    currentSamplingRate = try SamplingRate(parsing: &input)
+    let samplingRatesOffset = try UInt16(parsingBigEndian: &input)
+    let samplingRatesCount = try UInt16(parsingBigEndian: &input)
+    currentAspectRatio = try UInt16(parsingBigEndian: &input)
+    let aspectRatiosOffset = try UInt16(parsingBigEndian: &input)
+    let aspectRatiosCount = try UInt16(parsingBigEndian: &input)
+    currentSize = try UInt32(parsingBigEndian: &input)
+    let sizesOffset = try UInt16(parsingBigEndian: &input)
+    let sizesCount = try UInt16(parsingBigEndian: &input)
+    currentColorSpace = try UInt16(parsingBigEndian: &input)
+    let colorSpacesOffset = try UInt16(parsingBigEndian: &input)
+    let colorSpacesCount = try UInt16(parsingBigEndian: &input)
+    // the range fields are present when the arrays do not immediately follow color spaces
+    var rangesOffset = UInt16(0)
+    var rangesCount = UInt16(0)
+    if Int(formatSpecificsOffset) - input.startPosition >= Self.samplingRateRangeFieldsLength {
+      currentSamplingRateRange = try UInt64(parsingBigEndian: &input)
+      rangesOffset = try UInt16(parsingBigEndian: &input)
+      rangesCount = try UInt16(parsingBigEndian: &input)
+    } else {
+      currentSamplingRateRange = nil
+    }
+    supportedFormatSpecifics = try input.descriptorArray(at: formatSpecificsOffset, count: formatSpecificsCount, length: 4) {
+      try UInt32(parsingBigEndian: &$0)
+    }
+    supportedSamplingRates = try input.descriptorArray(at: samplingRatesOffset, count: samplingRatesCount, length: 4) {
+      try SamplingRate(parsing: &$0)
+    }
+    supportedAspectRatios = try input.descriptorArray(at: aspectRatiosOffset, count: aspectRatiosCount, length: 2) {
+      try UInt16(parsingBigEndian: &$0)
+    }
+    supportedSizes = try input.descriptorArray(at: sizesOffset, count: sizesCount, length: 4) {
+      try UInt32(parsingBigEndian: &$0)
+    }
+    supportedColorSpaces = try input.descriptorArray(at: colorSpacesOffset, count: colorSpacesCount, length: 2) {
+      try UInt16(parsingBigEndian: &$0)
+    }
+    supportedSamplingRateRanges = rangesCount == 0 ? [] :
+      try input.descriptorArray(at: rangesOffset, count: rangesCount, length: 8) {
+        try UInt64(parsingBigEndian: &$0)
+      }
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    var offset = _descriptorHeaderLength + Self.bodyLength +
+      (currentSamplingRateRange == nil ? 0 : Self.samplingRateRangeFieldsLength)
+    // each array follows the previous one
+    func arrayOffset(_ count: Int, _ length: Int) -> UInt16 {
+      defer { offset += count * length }
+      return UInt16(offset)
+    }
+    context.serialize(avdeccFixedString: objectName)
+    try context.serialize(localizedDescription)
+    try context.serialize(signalType)
+    context.serialize(uint16: signalIndex)
+    context.serialize(uint16: signalOutput)
+    context.serialize(uint32: pathLatency)
+    context.serialize(uint32: blockLatency)
+    context.serialize(uint8: format)
+    context.serialize(uint32: currentFormatSpecific)
+    context.serialize(uint16: arrayOffset(supportedFormatSpecifics.count, 4))
+    context.serialize(uint16: UInt16(supportedFormatSpecifics.count))
+    try context.serialize(currentSamplingRate)
+    context.serialize(uint16: arrayOffset(supportedSamplingRates.count, 4))
+    context.serialize(uint16: UInt16(supportedSamplingRates.count))
+    context.serialize(uint16: currentAspectRatio)
+    context.serialize(uint16: arrayOffset(supportedAspectRatios.count, 2))
+    context.serialize(uint16: UInt16(supportedAspectRatios.count))
+    context.serialize(uint32: currentSize)
+    context.serialize(uint16: arrayOffset(supportedSizes.count, 4))
+    context.serialize(uint16: UInt16(supportedSizes.count))
+    context.serialize(uint16: currentColorSpace)
+    context.serialize(uint16: arrayOffset(supportedColorSpaces.count, 2))
+    context.serialize(uint16: UInt16(supportedColorSpaces.count))
+    if let currentSamplingRateRange {
+      context.serialize(uint64: currentSamplingRateRange)
+      context.serialize(uint16: arrayOffset(supportedSamplingRateRanges.count, 8))
+      context.serialize(uint16: UInt16(supportedSamplingRateRanges.count))
+    }
+    for value in supportedFormatSpecifics {
+      context.serialize(uint32: value)
+    }
+    for rate in supportedSamplingRates {
+      try context.serialize(rate)
+    }
+    for value in supportedAspectRatios {
+      context.serialize(uint16: value)
+    }
+    for value in supportedSizes {
+      context.serialize(uint32: value)
+    }
+    for value in supportedColorSpaces {
+      context.serialize(uint16: value)
+    }
+    if currentSamplingRateRange != nil {
+      for value in supportedSamplingRateRanges {
+        context.serialize(uint64: value)
+      }
+    }
+  }
+
+  public var description: String {
+    "VideoClusterDescriptor(name: \"\(objectName)\", format: \(format), size: 0x\(String(currentSize, radix: 16)))"
+  }
+}
+
+/// SENSOR_CLUSTER descriptor (IEEE 1722.1-2021 Table 7-31).
+public struct SensorClusterDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 100
+
+  public var objectName: String
+  public var localizedDescription: LocalizedStringReference
+  public var signalType: DescriptorType
+  public var signalIndex: UInt16
+  public var signalOutput: UInt16
+  public var pathLatency: UInt32
+  public var blockLatency: UInt32
+  public var currentFormat: UInt64
+  public var supportedFormats: [UInt64]
+  public var currentSamplingRate: SamplingRate
+  public var supportedSamplingRates: [SamplingRate]
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    objectName = try String(parsingAvdeccFixedString: &input)
+    localizedDescription = try LocalizedStringReference(parsing: &input)
+    signalType = try DescriptorType(parsing: &input)
+    signalIndex = try UInt16(parsingBigEndian: &input)
+    signalOutput = try UInt16(parsingBigEndian: &input)
+    pathLatency = try UInt32(parsingBigEndian: &input)
+    blockLatency = try UInt32(parsingBigEndian: &input)
+    currentFormat = try UInt64(parsingBigEndian: &input)
+    let formatsOffset = try UInt16(parsingBigEndian: &input)
+    let formatsCount = try UInt16(parsingBigEndian: &input)
+    currentSamplingRate = try SamplingRate(parsing: &input)
+    let samplingRatesOffset = try UInt16(parsingBigEndian: &input)
+    let samplingRatesCount = try UInt16(parsingBigEndian: &input)
+    supportedFormats = try input.descriptorArray(at: formatsOffset, count: formatsCount, length: 8) {
+      try UInt64(parsingBigEndian: &$0)
+    }
+    supportedSamplingRates = try input.descriptorArray(at: samplingRatesOffset, count: samplingRatesCount, length: 4) {
+      try SamplingRate(parsing: &$0)
+    }
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    let formatsOffset = _descriptorHeaderLength + Self.bodyLength
+    context.serialize(avdeccFixedString: objectName)
+    try context.serialize(localizedDescription)
+    try context.serialize(signalType)
+    context.serialize(uint16: signalIndex)
+    context.serialize(uint16: signalOutput)
+    context.serialize(uint32: pathLatency)
+    context.serialize(uint32: blockLatency)
+    context.serialize(uint64: currentFormat)
+    context.serialize(uint16: UInt16(formatsOffset))
+    context.serialize(uint16: UInt16(supportedFormats.count))
+    try context.serialize(currentSamplingRate)
+    context.serialize(uint16: UInt16(formatsOffset + supportedFormats.count * 8))
+    context.serialize(uint16: UInt16(supportedSamplingRates.count))
+    for format in supportedFormats {
+      context.serialize(uint64: format)
+    }
+    for rate in supportedSamplingRates {
+      try context.serialize(rate)
+    }
+  }
+
+  public var description: String {
+    "SensorClusterDescriptor(name: \"\(objectName)\", formats: \(supportedFormats.count))"
+  }
+}
+
+/// A VIDEO_MAP mapping (IEEE 1722.1-2021 Table 7-35).
+public struct VideoMapping: Sendable, Hashable {
+  static let length = 8
+
+  public var streamIndex: UInt16
+  public var programStream: UInt16
+  public var elementaryStream: UInt16
+  public var clusterOffset: UInt16
+
+  public init(streamIndex: UInt16, programStream: UInt16, elementaryStream: UInt16, clusterOffset: UInt16) {
+    self.streamIndex = streamIndex
+    self.programStream = programStream
+    self.elementaryStream = elementaryStream
+    self.clusterOffset = clusterOffset
+  }
+
+  init(parsing input: inout ParserSpan) throws {
+    streamIndex = try UInt16(parsingBigEndian: &input)
+    programStream = try UInt16(parsingBigEndian: &input)
+    elementaryStream = try UInt16(parsingBigEndian: &input)
+    clusterOffset = try UInt16(parsingBigEndian: &input)
+  }
+
+  func serialize(into context: inout SerializationContext) {
+    context.serialize(uint16: streamIndex)
+    context.serialize(uint16: programStream)
+    context.serialize(uint16: elementaryStream)
+    context.serialize(uint16: clusterOffset)
+  }
+}
+
+/// VIDEO_MAP descriptor (IEEE 1722.1-2021 Table 7-34).
+public struct VideoMapDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 4
+
+  public var mappings: [VideoMapping]
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    let mappingsOffset = try UInt16(parsingBigEndian: &input)
+    let numberOfMappings = try UInt16(parsingBigEndian: &input)
+    mappings = try input.descriptorArray(at: mappingsOffset, count: numberOfMappings, length: VideoMapping.length) {
+      try VideoMapping(parsing: &$0)
+    }
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
+    context.serialize(uint16: UInt16(mappings.count))
+    for mapping in mappings {
+      mapping.serialize(into: &context)
+    }
+  }
+
+  public var description: String { "VideoMapDescriptor(mappings: \(mappings.count))" }
+}
+
+/// A SENSOR_MAP mapping (IEEE 1722.1-2021 Table 7-37).
+public struct SensorMapping: Sendable, Hashable {
+  static let length = 6
+
+  public var streamIndex: UInt16
+  public var streamSignal: UInt16
+  public var clusterOffset: UInt16
+
+  public init(streamIndex: UInt16, streamSignal: UInt16, clusterOffset: UInt16) {
+    self.streamIndex = streamIndex
+    self.streamSignal = streamSignal
+    self.clusterOffset = clusterOffset
+  }
+
+  init(parsing input: inout ParserSpan) throws {
+    streamIndex = try UInt16(parsingBigEndian: &input)
+    streamSignal = try UInt16(parsingBigEndian: &input)
+    clusterOffset = try UInt16(parsingBigEndian: &input)
+  }
+
+  func serialize(into context: inout SerializationContext) {
+    context.serialize(uint16: streamIndex)
+    context.serialize(uint16: streamSignal)
+    context.serialize(uint16: clusterOffset)
+  }
+}
+
+/// SENSOR_MAP descriptor (IEEE 1722.1-2021 Table 7-36).
+public struct SensorMapDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 4
+
+  public var mappings: [SensorMapping]
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    let mappingsOffset = try UInt16(parsingBigEndian: &input)
+    let numberOfMappings = try UInt16(parsingBigEndian: &input)
+    mappings = try input.descriptorArray(at: mappingsOffset, count: numberOfMappings, length: SensorMapping.length) {
+      try SensorMapping(parsing: &$0)
+    }
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
+    context.serialize(uint16: UInt16(mappings.count))
+    for mapping in mappings {
+      mapping.serialize(into: &context)
+    }
+  }
+
+  public var description: String { "SensorMapDescriptor(mappings: \(mappings.count))" }
+}
+
+/// SIGNAL_SELECTOR descriptor (IEEE 1722.1-2021 Table 7-40).
+public struct SignalSelectorDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 92
+
+  public var objectName: String
+  public var localizedDescription: LocalizedStringReference
+  public var blockLatency: UInt32
+  public var controlLatency: UInt32
+  public var controlDomain: UInt16
+  public var sources: [SignalSource]
+  public var currentSource: SignalSource
+  public var defaultSource: SignalSource
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    objectName = try String(parsingAvdeccFixedString: &input)
+    localizedDescription = try LocalizedStringReference(parsing: &input)
+    blockLatency = try UInt32(parsingBigEndian: &input)
+    controlLatency = try UInt32(parsingBigEndian: &input)
+    controlDomain = try UInt16(parsingBigEndian: &input)
+    let sourcesOffset = try UInt16(parsingBigEndian: &input)
+    let numberOfSources = try UInt16(parsingBigEndian: &input)
+    currentSource = try SignalSource(parsing: &input)
+    defaultSource = try SignalSource(parsing: &input)
+    sources = try input.descriptorArray(at: sourcesOffset, count: numberOfSources, length: SignalSource.length) {
+      try SignalSource(parsing: &$0)
+    }
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    context.serialize(avdeccFixedString: objectName)
+    try context.serialize(localizedDescription)
+    context.serialize(uint32: blockLatency)
+    context.serialize(uint32: controlLatency)
+    context.serialize(uint16: controlDomain)
+    context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
+    context.serialize(uint16: UInt16(sources.count))
+    try currentSource.serialize(into: &context)
+    try defaultSource.serialize(into: &context)
+    for source in sources {
+      try source.serialize(into: &context)
+    }
+  }
+
+  public var description: String {
+    "SignalSelectorDescriptor(name: \"\(objectName)\", sources: \(sources.count))"
+  }
+}
+
+/// MIXER descriptor (IEEE 1722.1-2021 Table 7-42). The value is kept packed as `valuesData`, from
+/// value_offset to the end of the descriptor, since its layout depends on `controlValueType`.
+public struct MixerDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 84
+
+  public var objectName: String
+  public var localizedDescription: LocalizedStringReference
+  public var blockLatency: UInt32
+  public var controlLatency: UInt32
+  public var controlDomain: UInt16
+  public var controlValueType: ControlValueType
+  public var sources: [SignalSource]
+  public var valuesData: [UInt8]
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    objectName = try String(parsingAvdeccFixedString: &input)
+    localizedDescription = try LocalizedStringReference(parsing: &input)
+    blockLatency = try UInt32(parsingBigEndian: &input)
+    controlLatency = try UInt32(parsingBigEndian: &input)
+    controlDomain = try UInt16(parsingBigEndian: &input)
+    controlValueType = try ControlValueType(rawValue: UInt16(parsingBigEndian: &input))
+    let sourcesOffset = try UInt16(parsingBigEndian: &input)
+    let numberOfSources = try UInt16(parsingBigEndian: &input)
+    let valueOffset = try UInt16(parsingBigEndian: &input)
+    sources = try input.descriptorArray(at: sourcesOffset, count: numberOfSources, length: SignalSource.length) {
+      try SignalSource(parsing: &$0)
+    }
+    valuesData = try input.descriptorBytes(from: valueOffset)
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    let sourcesOffset = _descriptorHeaderLength + Self.bodyLength
+    context.serialize(avdeccFixedString: objectName)
+    try context.serialize(localizedDescription)
+    context.serialize(uint32: blockLatency)
+    context.serialize(uint32: controlLatency)
+    context.serialize(uint16: controlDomain)
+    context.serialize(uint16: controlValueType.rawValue)
+    context.serialize(uint16: UInt16(sourcesOffset))
+    context.serialize(uint16: UInt16(sources.count))
+    context.serialize(uint16: UInt16(sourcesOffset + sources.count * SignalSource.length))
+    for source in sources {
+      try source.serialize(into: &context)
+    }
+    context.serialize(valuesData)
+  }
+
+  public var description: String {
+    "MixerDescriptor(name: \"\(objectName)\", sources: \(sources.count))"
+  }
+}
+
+/// MATRIX descriptor (IEEE 1722.1-2021 Table 7-45). The values are kept packed as `valuesData`,
+/// from values_offset to the end of the descriptor, since their layout depends on
+/// `controlValueType`.
+public struct MatrixDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 98
+
+  public var objectName: String
+  public var localizedDescription: LocalizedStringReference
+  public var blockLatency: UInt32
+  public var controlLatency: UInt32
+  public var controlDomain: UInt16
+  public var controlValueType: ControlValueType
+  public var controlType: UniqueIdentifier
+  public var width: UInt16
+  public var height: UInt16
+  public var numberOfValues: UInt16
+  /// The MATRIX_SIGNAL descriptors describing the matrix's sources.
+  public var numberOfSources: UInt16
+  public var baseSource: UInt16
+  public var valuesData: [UInt8]
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    objectName = try String(parsingAvdeccFixedString: &input)
+    localizedDescription = try LocalizedStringReference(parsing: &input)
+    blockLatency = try UInt32(parsingBigEndian: &input)
+    controlLatency = try UInt32(parsingBigEndian: &input)
+    controlDomain = try UInt16(parsingBigEndian: &input)
+    controlValueType = try ControlValueType(rawValue: UInt16(parsingBigEndian: &input))
+    controlType = try UniqueIdentifier(parsing: &input)
+    width = try UInt16(parsingBigEndian: &input)
+    height = try UInt16(parsingBigEndian: &input)
+    let valuesOffset = try UInt16(parsingBigEndian: &input)
+    numberOfValues = try UInt16(parsingBigEndian: &input)
+    numberOfSources = try UInt16(parsingBigEndian: &input)
+    baseSource = try UInt16(parsingBigEndian: &input)
+    valuesData = try input.descriptorBytes(from: valuesOffset)
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    context.serialize(avdeccFixedString: objectName)
+    try context.serialize(localizedDescription)
+    context.serialize(uint32: blockLatency)
+    context.serialize(uint32: controlLatency)
+    context.serialize(uint16: controlDomain)
+    context.serialize(uint16: controlValueType.rawValue)
+    try context.serialize(controlType)
+    context.serialize(uint16: width)
+    context.serialize(uint16: height)
+    context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
+    context.serialize(uint16: numberOfValues)
+    context.serialize(uint16: numberOfSources)
+    context.serialize(uint16: baseSource)
+    context.serialize(valuesData)
+  }
+
+  public var description: String {
+    "MatrixDescriptor(name: \"\(objectName)\", size: \(width)x\(height))"
+  }
+}
+
+/// MATRIX_SIGNAL descriptor (IEEE 1722.1-2021 Table 7-47), whose count precedes its offset.
+public struct MatrixSignalDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 4
+
+  public var signals: [SignalSource]
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    let signalsCount = try UInt16(parsingBigEndian: &input)
+    let signalsOffset = try UInt16(parsingBigEndian: &input)
+    signals = try input.descriptorArray(at: signalsOffset, count: signalsCount, length: SignalSource.length) {
+      try SignalSource(parsing: &$0)
+    }
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    context.serialize(uint16: UInt16(signals.count))
+    context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
+    for signal in signals {
+      try signal.serialize(into: &context)
+    }
+  }
+
+  public var description: String { "MatrixSignalDescriptor(signals: \(signals.count))" }
+}
+
+/// SIGNAL_SPLITTER descriptor (IEEE 1722.1-2021 Table 7-49).
+public struct SignalSplitterDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 88
+
+  public var objectName: String
+  public var localizedDescription: LocalizedStringReference
+  public var blockLatency: UInt32
+  public var controlLatency: UInt32
+  public var controlDomain: UInt16
+  public var signalType: DescriptorType
+  public var signalIndex: UInt16
+  public var signalOutput: UInt16
+  public var numberOfOutputs: UInt16
+  public var splitterMap: [SubSignalMapping]
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    objectName = try String(parsingAvdeccFixedString: &input)
+    localizedDescription = try LocalizedStringReference(parsing: &input)
+    blockLatency = try UInt32(parsingBigEndian: &input)
+    controlLatency = try UInt32(parsingBigEndian: &input)
+    controlDomain = try UInt16(parsingBigEndian: &input)
+    signalType = try DescriptorType(parsing: &input)
+    signalIndex = try UInt16(parsingBigEndian: &input)
+    signalOutput = try UInt16(parsingBigEndian: &input)
+    numberOfOutputs = try UInt16(parsingBigEndian: &input)
+    let mapCount = try UInt16(parsingBigEndian: &input)
+    let mapOffset = try UInt16(parsingBigEndian: &input)
+    splitterMap = try input.descriptorArray(at: mapOffset, count: mapCount, length: SubSignalMapping.length) {
+      try SubSignalMapping(parsing: &$0)
+    }
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    context.serialize(avdeccFixedString: objectName)
+    try context.serialize(localizedDescription)
+    context.serialize(uint32: blockLatency)
+    context.serialize(uint32: controlLatency)
+    context.serialize(uint16: controlDomain)
+    try context.serialize(signalType)
+    context.serialize(uint16: signalIndex)
+    context.serialize(uint16: signalOutput)
+    context.serialize(uint16: numberOfOutputs)
+    context.serialize(uint16: UInt16(splitterMap.count))
+    context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
+    for mapping in splitterMap {
+      mapping.serialize(into: &context)
+    }
+  }
+
+  public var description: String {
+    "SignalSplitterDescriptor(name: \"\(objectName)\", outputs: \(numberOfOutputs))"
+  }
+}
+
+/// SIGNAL_COMBINER descriptor (IEEE 1722.1-2021 Table 7-51).
+public struct SignalCombinerDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 84
+
+  public var objectName: String
+  public var localizedDescription: LocalizedStringReference
+  public var blockLatency: UInt32
+  public var controlLatency: UInt32
+  public var controlDomain: UInt16
+  public var combinerMap: [SubSignalMapping]
+  public var sources: [SignalSource]
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    objectName = try String(parsingAvdeccFixedString: &input)
+    localizedDescription = try LocalizedStringReference(parsing: &input)
+    blockLatency = try UInt32(parsingBigEndian: &input)
+    controlLatency = try UInt32(parsingBigEndian: &input)
+    controlDomain = try UInt16(parsingBigEndian: &input)
+    let mapCount = try UInt16(parsingBigEndian: &input)
+    let mapOffset = try UInt16(parsingBigEndian: &input)
+    let sourcesOffset = try UInt16(parsingBigEndian: &input)
+    let numberOfSources = try UInt16(parsingBigEndian: &input)
+    combinerMap = try input.descriptorArray(at: mapOffset, count: mapCount, length: SubSignalMapping.length) {
+      try SubSignalMapping(parsing: &$0)
+    }
+    sources = try input.descriptorArray(at: sourcesOffset, count: numberOfSources, length: SignalSource.length) {
+      try SignalSource(parsing: &$0)
+    }
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    let mapOffset = _descriptorHeaderLength + Self.bodyLength
+    context.serialize(avdeccFixedString: objectName)
+    try context.serialize(localizedDescription)
+    context.serialize(uint32: blockLatency)
+    context.serialize(uint32: controlLatency)
+    context.serialize(uint16: controlDomain)
+    context.serialize(uint16: UInt16(combinerMap.count))
+    context.serialize(uint16: UInt16(mapOffset))
+    context.serialize(uint16: UInt16(mapOffset + combinerMap.count * SubSignalMapping.length))
+    context.serialize(uint16: UInt16(sources.count))
+    for mapping in combinerMap {
+      mapping.serialize(into: &context)
+    }
+    for source in sources {
+      try source.serialize(into: &context)
+    }
+  }
+
+  public var description: String {
+    "SignalCombinerDescriptor(name: \"\(objectName)\", sources: \(sources.count))"
+  }
+}
+
+/// SIGNAL_DEMULTIPLEXER descriptor (IEEE 1722.1-2021 Table 7-54).
+public struct SignalDemultiplexerDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 88
+
+  public var objectName: String
+  public var localizedDescription: LocalizedStringReference
+  public var blockLatency: UInt32
+  public var controlLatency: UInt32
+  public var controlDomain: UInt16
+  public var signalType: DescriptorType
+  public var signalIndex: UInt16
+  public var signalOutput: UInt16
+  public var numberOfOutputs: UInt16
+  public var demultiplexerMap: [SubSignalMapping]
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    objectName = try String(parsingAvdeccFixedString: &input)
+    localizedDescription = try LocalizedStringReference(parsing: &input)
+    blockLatency = try UInt32(parsingBigEndian: &input)
+    controlLatency = try UInt32(parsingBigEndian: &input)
+    controlDomain = try UInt16(parsingBigEndian: &input)
+    signalType = try DescriptorType(parsing: &input)
+    signalIndex = try UInt16(parsingBigEndian: &input)
+    signalOutput = try UInt16(parsingBigEndian: &input)
+    numberOfOutputs = try UInt16(parsingBigEndian: &input)
+    let mapCount = try UInt16(parsingBigEndian: &input)
+    let mapOffset = try UInt16(parsingBigEndian: &input)
+    demultiplexerMap = try input.descriptorArray(at: mapOffset, count: mapCount, length: SubSignalMapping.length) {
+      try SubSignalMapping(parsing: &$0)
+    }
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    context.serialize(avdeccFixedString: objectName)
+    try context.serialize(localizedDescription)
+    context.serialize(uint32: blockLatency)
+    context.serialize(uint32: controlLatency)
+    context.serialize(uint16: controlDomain)
+    try context.serialize(signalType)
+    context.serialize(uint16: signalIndex)
+    context.serialize(uint16: signalOutput)
+    context.serialize(uint16: numberOfOutputs)
+    context.serialize(uint16: UInt16(demultiplexerMap.count))
+    context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
+    for mapping in demultiplexerMap {
+      mapping.serialize(into: &context)
+    }
+  }
+
+  public var description: String {
+    "SignalDemultiplexerDescriptor(name: \"\(objectName)\", outputs: \(numberOfOutputs))"
+  }
+}
+
+/// SIGNAL_MULTIPLEXER descriptor (IEEE 1722.1-2021 Table 7-56).
+public struct SignalMultiplexerDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 84
+
+  public var objectName: String
+  public var localizedDescription: LocalizedStringReference
+  public var blockLatency: UInt32
+  public var controlLatency: UInt32
+  public var controlDomain: UInt16
+  public var multiplexerMap: [SubSignalMapping]
+  public var sources: [SignalSource]
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    objectName = try String(parsingAvdeccFixedString: &input)
+    localizedDescription = try LocalizedStringReference(parsing: &input)
+    blockLatency = try UInt32(parsingBigEndian: &input)
+    controlLatency = try UInt32(parsingBigEndian: &input)
+    controlDomain = try UInt16(parsingBigEndian: &input)
+    let mapCount = try UInt16(parsingBigEndian: &input)
+    let mapOffset = try UInt16(parsingBigEndian: &input)
+    let sourcesOffset = try UInt16(parsingBigEndian: &input)
+    let numberOfSources = try UInt16(parsingBigEndian: &input)
+    multiplexerMap = try input.descriptorArray(at: mapOffset, count: mapCount, length: SubSignalMapping.length) {
+      try SubSignalMapping(parsing: &$0)
+    }
+    sources = try input.descriptorArray(at: sourcesOffset, count: numberOfSources, length: SignalSource.length) {
+      try SignalSource(parsing: &$0)
+    }
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    let mapOffset = _descriptorHeaderLength + Self.bodyLength
+    context.serialize(avdeccFixedString: objectName)
+    try context.serialize(localizedDescription)
+    context.serialize(uint32: blockLatency)
+    context.serialize(uint32: controlLatency)
+    context.serialize(uint16: controlDomain)
+    context.serialize(uint16: UInt16(multiplexerMap.count))
+    context.serialize(uint16: UInt16(mapOffset))
+    context.serialize(uint16: UInt16(mapOffset + multiplexerMap.count * SubSignalMapping.length))
+    context.serialize(uint16: UInt16(sources.count))
+    for mapping in multiplexerMap {
+      mapping.serialize(into: &context)
+    }
+    for source in sources {
+      try source.serialize(into: &context)
+    }
+  }
+
+  public var description: String {
+    "SignalMultiplexerDescriptor(name: \"\(objectName)\", sources: \(sources.count))"
+  }
+}
+
+/// SIGNAL_TRANSCODER descriptor (IEEE 1722.1-2021 Table 7-59). The values are kept packed as
+/// `valuesData`, from values_offset to the end of the descriptor, since their layout depends on
+/// `controlValueType`.
+public struct SignalTranscoderDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 96
+
+  public var objectName: String
+  public var localizedDescription: LocalizedStringReference
+  public var blockLatency: UInt32
+  public var controlLatency: UInt32
+  public var controlDomain: UInt16
+  public var controlValueType: ControlValueType
+  public var numberOfValues: UInt16
+  public var signalType: DescriptorType
+  public var signalIndex: UInt16
+  public var signalOutput: UInt16
+  public var transcoderType: UniqueIdentifier
+  public var valuesData: [UInt8]
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    objectName = try String(parsingAvdeccFixedString: &input)
+    localizedDescription = try LocalizedStringReference(parsing: &input)
+    blockLatency = try UInt32(parsingBigEndian: &input)
+    controlLatency = try UInt32(parsingBigEndian: &input)
+    controlDomain = try UInt16(parsingBigEndian: &input)
+    controlValueType = try ControlValueType(rawValue: UInt16(parsingBigEndian: &input))
+    let valuesOffset = try UInt16(parsingBigEndian: &input)
+    numberOfValues = try UInt16(parsingBigEndian: &input)
+    signalType = try DescriptorType(parsing: &input)
+    signalIndex = try UInt16(parsingBigEndian: &input)
+    signalOutput = try UInt16(parsingBigEndian: &input)
+    transcoderType = try UniqueIdentifier(parsing: &input)
+    valuesData = try input.descriptorBytes(from: valuesOffset)
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    context.serialize(avdeccFixedString: objectName)
+    try context.serialize(localizedDescription)
+    context.serialize(uint32: blockLatency)
+    context.serialize(uint32: controlLatency)
+    context.serialize(uint16: controlDomain)
+    context.serialize(uint16: controlValueType.rawValue)
+    context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
+    context.serialize(uint16: numberOfValues)
+    try context.serialize(signalType)
+    context.serialize(uint16: signalIndex)
+    context.serialize(uint16: signalOutput)
+    try context.serialize(transcoderType)
+    context.serialize(valuesData)
+  }
+
+  public var description: String {
+    "SignalTranscoderDescriptor(name: \"\(objectName)\", type: \(transcoderType))"
+  }
+}
+
+/// CONTROL_BLOCK descriptor (IEEE 1722.1-2021 Table 7-62).
+public struct ControlBlockDescriptor: Sendable, Hashable, CustomStringConvertible {
+  static let bodyLength = 78
+
+  public var objectName: String
+  public var localizedDescription: LocalizedStringReference
+  public var numberOfControls: UInt16
+  public var baseControl: UInt16
+  public var finalControlIndex: UInt16
+  public var signalType: DescriptorType
+  public var signalIndex: UInt16
+  public var signalOutput: UInt16
+
+  init(parsingBody input: inout ParserSpan) throws {
+    try input.requireRemaining(Self.bodyLength)
+    objectName = try String(parsingAvdeccFixedString: &input)
+    localizedDescription = try LocalizedStringReference(parsing: &input)
+    numberOfControls = try UInt16(parsingBigEndian: &input)
+    baseControl = try UInt16(parsingBigEndian: &input)
+    finalControlIndex = try UInt16(parsingBigEndian: &input)
+    signalType = try DescriptorType(parsing: &input)
+    signalIndex = try UInt16(parsingBigEndian: &input)
+    signalOutput = try UInt16(parsingBigEndian: &input)
+  }
+
+  func serializeBody(into context: inout SerializationContext) throws {
+    context.serialize(avdeccFixedString: objectName)
+    try context.serialize(localizedDescription)
+    context.serialize(uint16: numberOfControls)
+    context.serialize(uint16: baseControl)
+    context.serialize(uint16: finalControlIndex)
+    try context.serialize(signalType)
+    context.serialize(uint16: signalIndex)
+    context.serialize(uint16: signalOutput)
+  }
+
+  public var description: String {
+    "ControlBlockDescriptor(name: \"\(objectName)\", controls: \(numberOfControls)@\(baseControl))"
+  }
+}
+
 // MARK: - Descriptor
 
 /// Any AEM descriptor (IEEE 1722.1-2021 §7.2). Types without a dedicated model are kept as
@@ -1510,6 +2627,22 @@ public enum Descriptor: Sendable, Hashable {
   case timing(TimingDescriptor)
   case ptpInstance(PtpInstanceDescriptor)
   case ptpPort(PtpPortDescriptor)
+  case videoUnit(VideoUnitDescriptor)
+  case sensorUnit(SensorUnitDescriptor)
+  case videoCluster(VideoClusterDescriptor)
+  case sensorCluster(SensorClusterDescriptor)
+  case videoMap(VideoMapDescriptor)
+  case sensorMap(SensorMapDescriptor)
+  case signalSelector(SignalSelectorDescriptor)
+  case mixer(MixerDescriptor)
+  case matrix(MatrixDescriptor)
+  case matrixSignal(MatrixSignalDescriptor)
+  case signalSplitter(SignalSplitterDescriptor)
+  case signalCombiner(SignalCombinerDescriptor)
+  case signalDemultiplexer(SignalDemultiplexerDescriptor)
+  case signalMultiplexer(SignalMultiplexerDescriptor)
+  case signalTranscoder(SignalTranscoderDescriptor)
+  case controlBlock(ControlBlockDescriptor)
   case other(descriptorType: UInt16, body: [UInt8])
 
   public var descriptorType: DescriptorType {
@@ -1539,6 +2672,22 @@ public enum Descriptor: Sendable, Hashable {
     case .timing: .timing
     case .ptpInstance: .ptpInstance
     case .ptpPort: .ptpPort
+    case .videoUnit: .videoUnit
+    case .sensorUnit: .sensorUnit
+    case .videoCluster: .videoCluster
+    case .sensorCluster: .sensorCluster
+    case .videoMap: .videoMap
+    case .sensorMap: .sensorMap
+    case .signalSelector: .signalSelector
+    case .mixer: .mixer
+    case .matrix: .matrix
+    case .matrixSignal: .matrixSignal
+    case .signalSplitter: .signalSplitter
+    case .signalCombiner: .signalCombiner
+    case .signalDemultiplexer: .signalDemultiplexer
+    case .signalMultiplexer: .signalMultiplexer
+    case .signalTranscoder: .signalTranscoder
+    case .controlBlock: .controlBlock
     case let .other(descriptorType, _): DescriptorType(rawValue: descriptorType)
     }
   }
@@ -1577,6 +2726,25 @@ public enum Descriptor: Sendable, Hashable {
     case .timing: self = try .timing(TimingDescriptor(parsingBody: &input))
     case .ptpInstance: self = try .ptpInstance(PtpInstanceDescriptor(parsingBody: &input))
     case .ptpPort: self = try .ptpPort(PtpPortDescriptor(parsingBody: &input))
+    case .videoUnit: self = try .videoUnit(VideoUnitDescriptor(parsingBody: &input))
+    case .sensorUnit: self = try .sensorUnit(SensorUnitDescriptor(parsingBody: &input))
+    case .videoCluster: self = try .videoCluster(VideoClusterDescriptor(parsingBody: &input))
+    case .sensorCluster: self = try .sensorCluster(SensorClusterDescriptor(parsingBody: &input))
+    case .videoMap: self = try .videoMap(VideoMapDescriptor(parsingBody: &input))
+    case .sensorMap: self = try .sensorMap(SensorMapDescriptor(parsingBody: &input))
+    case .signalSelector: self = try .signalSelector(SignalSelectorDescriptor(parsingBody: &input))
+    case .mixer: self = try .mixer(MixerDescriptor(parsingBody: &input))
+    case .matrix: self = try .matrix(MatrixDescriptor(parsingBody: &input))
+    case .matrixSignal: self = try .matrixSignal(MatrixSignalDescriptor(parsingBody: &input))
+    case .signalSplitter: self = try .signalSplitter(SignalSplitterDescriptor(parsingBody: &input))
+    case .signalCombiner: self = try .signalCombiner(SignalCombinerDescriptor(parsingBody: &input))
+    case .signalDemultiplexer:
+      self = try .signalDemultiplexer(SignalDemultiplexerDescriptor(parsingBody: &input))
+    case .signalMultiplexer:
+      self = try .signalMultiplexer(SignalMultiplexerDescriptor(parsingBody: &input))
+    case .signalTranscoder:
+      self = try .signalTranscoder(SignalTranscoderDescriptor(parsingBody: &input))
+    case .controlBlock: self = try .controlBlock(ControlBlockDescriptor(parsingBody: &input))
     default:
       self = .other(
         descriptorType: descriptorTypeRaw,
@@ -1612,6 +2780,22 @@ public enum Descriptor: Sendable, Hashable {
     case let .timing(descriptor): try descriptor.serializeBody(into: &context)
     case let .ptpInstance(descriptor): try descriptor.serializeBody(into: &context)
     case let .ptpPort(descriptor): try descriptor.serializeBody(into: &context)
+    case let .videoUnit(descriptor): try descriptor.serializeBody(into: &context)
+    case let .sensorUnit(descriptor): try descriptor.serializeBody(into: &context)
+    case let .videoCluster(descriptor): try descriptor.serializeBody(into: &context)
+    case let .sensorCluster(descriptor): try descriptor.serializeBody(into: &context)
+    case let .videoMap(descriptor): try descriptor.serializeBody(into: &context)
+    case let .sensorMap(descriptor): try descriptor.serializeBody(into: &context)
+    case let .signalSelector(descriptor): try descriptor.serializeBody(into: &context)
+    case let .mixer(descriptor): try descriptor.serializeBody(into: &context)
+    case let .matrix(descriptor): try descriptor.serializeBody(into: &context)
+    case let .matrixSignal(descriptor): try descriptor.serializeBody(into: &context)
+    case let .signalSplitter(descriptor): try descriptor.serializeBody(into: &context)
+    case let .signalCombiner(descriptor): try descriptor.serializeBody(into: &context)
+    case let .signalDemultiplexer(descriptor): try descriptor.serializeBody(into: &context)
+    case let .signalMultiplexer(descriptor): try descriptor.serializeBody(into: &context)
+    case let .signalTranscoder(descriptor): try descriptor.serializeBody(into: &context)
+    case let .controlBlock(descriptor): try descriptor.serializeBody(into: &context)
     case let .other(_, body): context.serialize(body)
     }
   }
@@ -1650,5 +2834,23 @@ extension ParserSpan {
       throw AvdeccCodecError.invalidOffset(Int(offset))
     }
     return Int(offset)
+  }
+
+  /// The `count` elements of `length` octets at descriptor `offset`.
+  func descriptorArray<Element>(
+    at offset: UInt16,
+    count: UInt16,
+    length: Int,
+    _ parse: (inout ParserSpan) throws -> Element
+  ) throws -> [Element] {
+    var elements = try seeking(toAbsoluteOffset: descriptorOffset(offset))
+    try elements.requireRemaining(count, of: length)
+    return try (0..<count).map { _ in try parse(&elements) }
+  }
+
+  /// The octets from descriptor `offset` to the end of the descriptor.
+  func descriptorBytes(from offset: UInt16) throws -> [UInt8] {
+    var bytes = try seeking(toAbsoluteOffset: descriptorOffset(offset))
+    return [UInt8](parsingRemainingBytes: &bytes)
   }
 }
