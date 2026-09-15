@@ -679,6 +679,22 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  // with Milan timeouts an unanswered bind fails after 200 ms and one retry, not 4.5 s and one
+  // retry (Milan 1.3 Table 5.26)
+  func testMilanAcmpCommandTimeout() async throws {
+    var timing = ControllerTiming()
+    timing.acmpCommandTimeouts = .milan
+    let controller = try await makeController(timing: timing)
+    entity.behaviour.withLock { $0.dropAcmpCommands = true }
+    let start = ContinuousClock.now
+    do {
+      _ = try await controller.connectStream(talker: talkerStream, listener: listenerStream)
+      XCTFail("expected the bind to time out")
+    } catch {}
+    XCTAssertLessThan(ContinuousClock.now - start, .milliseconds(1500))
+    await controller.close()
+  }
+
   func testReservedAcmpStatusIsPreserved() async throws {
     let controller = try await makeController()
     let events = await controller.events()

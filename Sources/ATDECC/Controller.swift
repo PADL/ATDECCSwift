@@ -22,14 +22,23 @@ import Logging
 /// Commands in flight to one entity at a time; further commands queue (as la_avdecc does).
 private let _maximumInflightAecpCommands = 10
 
-/// Timeout of each ACMP command (IEEE 1722.1-2021 Table 8-1).
-private func _acmpCommandTimeout(_ messageType: AcmpMessageType) -> Duration {
-  switch messageType {
-  case .connectTxCommand: .milliseconds(2000)
+/// The ACMP command timeouts a controller uses.
+public enum AcmpCommandTimeouts: Sendable {
+  /// IEEE 1722.1-2021 Table 8-1, in which a listener answers CONNECT_RX only after its talker.
+  case ieee1722_1
+  /// Milan 1.3 Table 5.26: a listener answers a bind at once, and probes its talker itself.
+  case milan
+}
+
+/// Timeout of each ACMP command.
+private func _acmpCommandTimeout(_ messageType: AcmpMessageType, _ timeouts: AcmpCommandTimeouts) -> Duration {
+  let isMilan = timeouts == .milan
+  return switch messageType {
+  case .connectTxCommand: isMilan ? .milliseconds(200) : .milliseconds(2000) // PROBE_TX
   case .disconnectTxCommand: .milliseconds(200)
   case .getTxStateCommand: .milliseconds(200)
-  case .connectRxCommand: .milliseconds(4500)
-  case .disconnectRxCommand: .milliseconds(500)
+  case .connectRxCommand: isMilan ? .milliseconds(200) : .milliseconds(4500) // BIND_RX
+  case .disconnectRxCommand: isMilan ? .milliseconds(200) : .milliseconds(500) // UNBIND_RX
   case .getRxStateCommand: .milliseconds(200)
   case .getTxConnectionCommand: .milliseconds(200)
   default: preconditionFailure("\(messageType) is not an ACMP command")
@@ -41,6 +50,7 @@ struct ControllerTiming: Sendable {
   /// Timeout of every AECP command (IEEE 1722.1-2021 §9.3.2.6); an IN_PROGRESS response
   /// restarts it.
   var aecpCommandTimeout = Duration.milliseconds(250)
+  var acmpCommandTimeouts = AcmpCommandTimeouts.ieee1722_1
   /// How often a time-limited unsolicited notification registration is renewed (IEEE
   /// 1722.1-2021 §7.4.37.2).
   var unsolicitedNotificationRenewalInterval = Duration.seconds(100)
@@ -233,12 +243,17 @@ public actor Controller<Port: NetworkPort> {
 
   /// Creates a controller entity with `entityID` on `endStation`, and sends ENTITY_DISCOVER
   /// to find the entities already on the network.
+  /// A controller of Milan entities only should use `.milan` ACMP timeouts, so that a listener
+  /// that does not answer is reported in 400 ms rather than 9 s.
   public init(
     endStation: EndStation<Port>,
     entityID: UniqueIdentifier,
-    logger: Logger? = nil
+    logger: Logger? = nil,
+    acmpCommandTimeouts: AcmpCommandTimeouts = .ieee1722_1
   ) async throws {
-    try await self.init(endStation: endStation, entityID: entityID, logger: logger, timing: ControllerTiming())
+    var timing = ControllerTiming()
+    timing.acmpCommandTimeouts = acmpCommandTimeouts
+    try await self.init(endStation: endStation, entityID: entityID, logger: logger, timing: timing)
   }
 
   /// `timing` is injectable for tests.
@@ -1256,7 +1271,7 @@ public actor Controller<Port: NetworkPort> {
     guard let transaction = _acmpTransactions[sequenceID], transaction.timer === timer,
           !transaction.promise.isResolved
     else { return }
-    timer.start(interval: _acmpCommandTimeout(transaction.acmpdu.messageType))
+    timer.start(interval: _acmpCommandTimeout(transaction.acmpdu.messageType, _timing.acmpCommandTimeouts))
   }
 
   private func _acmpCommandSendFailed(sequenceID: UInt16, timer: Timer, error: any Error) {
