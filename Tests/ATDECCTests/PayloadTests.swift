@@ -282,6 +282,18 @@ final class PayloadTests: XCTestCase {
     XCTAssertEqual(info.streamVlanID, 2)
   }
 
+  func testIncrementControlCommand() throws {
+    let command = AemCommandPayload.incrementControl(descriptorType: .control, descriptorIndex: 2, valueIndices: [0, 3])
+    let bytes = try command.serialized()
+    // descriptor_type, descriptor_index, index_count, reserved, index_list (Figure 7-51)
+    XCTAssertEqual(bytes, be16(DescriptorType.control.rawValue) + be16(2) + be16(2) + be16(0) + [0, 3])
+    XCTAssertEqual(try AemCommandPayload(commandTypeRaw: command.commandTypeRaw, data: bytes), command)
+    XCTAssertEqual(
+      AemCommandPayload.decrementControl(descriptorType: .control, descriptorIndex: 2, valueIndices: []).commandTypeRaw,
+      AemCommandType.decrementControl.rawValue
+    )
+  }
+
   func testMemoryObjectLengthFieldOrder() throws {
     let command = AemCommandPayload.setMemoryObjectLength(
       configurationIndex: 1,

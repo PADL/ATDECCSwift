@@ -1061,7 +1061,9 @@ public actor Controller<Port: NetworkPort> {
       guard descriptorType == .clockDomain else { break }
       _yield(.clockSourceChanged(id, clockDomainIndex: descriptorIndex, clockSourceIndex: clockSourceIndex))
     case let .setControl(descriptorType, descriptorIndex, packedControlValues),
-         let .getControl(descriptorType, descriptorIndex, packedControlValues):
+         let .getControl(descriptorType, descriptorIndex, packedControlValues),
+         let .incrementControl(descriptorType, descriptorIndex, packedControlValues),
+         let .decrementControl(descriptorType, descriptorIndex, packedControlValues):
       guard descriptorType == .control else { break }
       _yield(.controlValuesChanged(id, controlIndex: descriptorIndex, packedControlValues: packedControlValues))
     case let .startStreaming(descriptorType, descriptorIndex):
@@ -2162,6 +2164,29 @@ public extension Controller {
   ) async throws -> [UInt8] {
     guard case let .setControl(_, _, packedControlValues) = try await _aem(targetEntityID, .setControl(
       descriptorType: .control, descriptorIndex: controlIndex, packedControlValues: packedControlValues
+    )) else { throw AemStatus.protocolError }
+    return packedControlValues
+  }
+
+  /// INCREMENT_CONTROL (IEEE 1722.1-2021 §7.4.27): steps each value at `valueIndices` up by the
+  /// control's step, or a selector to its next option, and returns the control's packed values.
+  @discardableResult
+  func incrementControlValues(
+    id targetEntityID: UniqueIdentifier, controlIndex: UInt16, valueIndices: [UInt8]
+  ) async throws -> [UInt8] {
+    guard case let .incrementControl(_, _, packedControlValues) = try await _aem(targetEntityID, .incrementControl(
+      descriptorType: .control, descriptorIndex: controlIndex, valueIndices: valueIndices
+    )) else { throw AemStatus.protocolError }
+    return packedControlValues
+  }
+
+  /// DECREMENT_CONTROL (IEEE 1722.1-2021 §7.4.28): as `incrementControlValues`, stepping down.
+  @discardableResult
+  func decrementControlValues(
+    id targetEntityID: UniqueIdentifier, controlIndex: UInt16, valueIndices: [UInt8]
+  ) async throws -> [UInt8] {
+    guard case let .decrementControl(_, _, packedControlValues) = try await _aem(targetEntityID, .decrementControl(
+      descriptorType: .control, descriptorIndex: controlIndex, valueIndices: valueIndices
     )) else { throw AemStatus.protocolError }
     return packedControlValues
   }

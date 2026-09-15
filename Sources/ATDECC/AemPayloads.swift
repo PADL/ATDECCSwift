@@ -95,6 +95,9 @@ public enum AemCommandPayload: Sendable, Hashable {
     packedControlValues: [UInt8]
   )
   case getControl(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  /// `valueIndices` are the indices of the control's values to step (IEEE 1722.1-2021 §7.4.27).
+  case incrementControl(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, valueIndices: [UInt8])
+  case decrementControl(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, valueIndices: [UInt8])
   case startStreaming(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
   case stopStreaming(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
   case registerUnsolicitedNotification(flags: RegisterUnsolicitedNotificationFlags)
@@ -164,6 +167,8 @@ public enum AemCommandPayload: Sendable, Hashable {
     case .getClockSource: AemCommandType.getClockSource.rawValue
     case .setControl: AemCommandType.setControl.rawValue
     case .getControl: AemCommandType.getControl.rawValue
+    case .incrementControl: AemCommandType.incrementControl.rawValue
+    case .decrementControl: AemCommandType.decrementControl.rawValue
     case .startStreaming: AemCommandType.startStreaming.rawValue
     case .stopStreaming: AemCommandType.stopStreaming.rawValue
     case .registerUnsolicitedNotification:
@@ -266,6 +271,14 @@ public enum AemCommandPayload: Sendable, Hashable {
       try context.serialize(descriptorType)
       context.serialize(uint16: descriptorIndex)
       context.serialize(packedControlValues)
+    case let .incrementControl(descriptorType, descriptorIndex, valueIndices),
+         let .decrementControl(descriptorType, descriptorIndex, valueIndices):
+      guard valueIndices.count <= Int(UInt16.max) else { throw AvdeccCodecError.valueTooLarge }
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      context.serialize(uint16: UInt16(valueIndices.count)) // index_count
+      context.serialize(uint16: 0) // reserved
+      context.serialize(valueIndices)
     case let .getAsPath(descriptorIndex):
       context.serialize(uint16: descriptorIndex)
       context.serialize(uint16: 0) // reserved
@@ -405,6 +418,12 @@ public enum AemCommandPayload: Sendable, Hashable {
       case .getControl:
         let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
         return .getControl(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .incrementControl:
+        let (descriptorType, descriptorIndex, valueIndices) = try _parseControlValueIndices(&input)
+        return .incrementControl(descriptorType: descriptorType, descriptorIndex: descriptorIndex, valueIndices: valueIndices)
+      case .decrementControl:
+        let (descriptorType, descriptorIndex, valueIndices) = try _parseControlValueIndices(&input)
+        return .decrementControl(descriptorType: descriptorType, descriptorIndex: descriptorIndex, valueIndices: valueIndices)
       case .startStreaming:
         let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
         return .startStreaming(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
@@ -581,6 +600,16 @@ public enum AemResponsePayload: Sendable, Hashable {
     packedControlValues: [UInt8]
   )
   case getControl(
+    descriptorType: DescriptorType,
+    descriptorIndex: DescriptorIndex,
+    packedControlValues: [UInt8]
+  )
+  case incrementControl(
+    descriptorType: DescriptorType,
+    descriptorIndex: DescriptorIndex,
+    packedControlValues: [UInt8]
+  )
+  case decrementControl(
     descriptorType: DescriptorType,
     descriptorIndex: DescriptorIndex,
     packedControlValues: [UInt8]
@@ -782,6 +811,20 @@ public enum AemResponsePayload: Sendable, Hashable {
           descriptorIndex: descriptorIndex,
           packedControlValues: [UInt8](parsingRemainingBytes: &input)
         )
+      case .incrementControl:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .incrementControl(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          packedControlValues: [UInt8](parsingRemainingBytes: &input)
+        )
+      case .decrementControl:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .decrementControl(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          packedControlValues: [UInt8](parsingRemainingBytes: &input)
+        )
       case .startStreaming:
         let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
         return .startStreaming(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
@@ -937,6 +980,17 @@ private func _serializeAudioMappings(
   for mapping in mappings {
     try context.serialize(mapping)
   }
+}
+
+// INCREMENT/DECREMENT_CONTROL: descriptor, index_count, reserved and index_count value indices
+// (IEEE 1722.1-2021 Figure 7-51).
+private func _parseControlValueIndices(
+  _ input: inout ParserSpan
+) throws -> (DescriptorType, DescriptorIndex, [UInt8]) {
+  let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+  let indexCount = try UInt16(parsingBigEndian: &input)
+  _ = try UInt16(parsingBigEndian: &input) // reserved
+  return (descriptorType, descriptorIndex, try [UInt8](parsing: &input, byteCount: Int(indexCount)))
 }
 
 // SET/GET_MEMORY_OBJECT_LENGTH put the memory object's descriptor_index before

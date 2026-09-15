@@ -647,6 +647,21 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  // another controller's INCREMENT_CONTROL notifies the control's new values (§7.5.2)
+  func testUnsolicitedIncrementControl() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    try await entity.sendUnsolicited(
+      .incrementControl,
+      data: be16(DescriptorType.control.rawValue) + be16(2) + [0x05]
+    )
+    let changed = await first(events) {
+      if case .controlValuesChanged(entityID, controlIndex: 2, packedControlValues: [0x05]) = $0 { true } else { false }
+    }
+    XCTAssertNotNil(changed)
+    await controller.close()
+  }
+
   func testUnsolicitedRebootIsReported() async throws {
     let controller = try await makeController()
     let events = await controller.events()
