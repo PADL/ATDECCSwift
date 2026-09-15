@@ -831,6 +831,18 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  // a bind can request connection flags such as STREAMING_WAIT (IEEE 1722.1-2021 Table 8-4)
+  func testConnectStreamSendsFlags() async throws {
+    let controller = try await makeController()
+    _ = try await controller.connectStream(talker: talkerStream, listener: listenerStream, flags: .streamingWait)
+    let sent = await entity.firstReceived {
+      if case let .acmp(acmpdu) = $0 { acmpdu.messageType == .connectRxCommand } else { false }
+    }
+    guard case let .acmp(acmpdu) = sent else { return XCTFail("no CONNECT_RX_COMMAND sent") }
+    XCTAssertEqual(acmpdu.flags, .streamingWait)
+    await controller.close()
+  }
+
   func testReservedAcmpStatusIsPreserved() async throws {
     let controller = try await makeController()
     let events = await controller.events()

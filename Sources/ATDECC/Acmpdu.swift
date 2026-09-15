@@ -49,6 +49,9 @@ public struct Acmpdu: Sendable, Hashable, CustomStringConvertible {
   /// length, without the fields 2021 adds, as la_avdecc sends; longer ACMPDUs are accepted and
   /// the additional fields ignored.
   public static let length: UInt16 = 44
+  /// control_data_length with the IP fields IEEE 1722.1-2021 adds (§8.2.1.6), used to send an
+  /// ACMPDU that sets any of them.
+  public static let ieee2021Length: UInt16 = 84
 
   public var messageType: AcmpMessageType
   /// Five-bit ACMP status; see `AcmpStatus`.
@@ -64,6 +67,16 @@ public struct Acmpdu: Sendable, Hashable, CustomStringConvertible {
   public var sequenceID: UInt16
   public var flags: ConnectionFlags
   public var streamVlanID: UInt16
+  /// The number of entries in a talker's connected listeners array, when `clEntriesValid` is set
+  /// (IEEE 1722.1-2021 §8.2.1.18).
+  public var connectedListenersEntries: UInt16
+  /// The IEEE 1722.1-2021 IP transport fields (§8.2.1.19 to §8.2.1.23); zero in a 1722.1-2013
+  /// ACMPDU. The addresses are 16 octets, IPv4 being mapped as in RFC 4291 §2.5.5.2.
+  public var ipFlags: UInt16
+  public var sourcePort: UInt16
+  public var destinationPort: UInt16
+  public var sourceIPAddress: [UInt8]
+  public var destinationIPAddress: [UInt8]
 
   public init(
     messageType: AcmpMessageType,
@@ -78,7 +91,13 @@ public struct Acmpdu: Sendable, Hashable, CustomStringConvertible {
     connectionCount: UInt16 = 0,
     sequenceID: UInt16 = 0,
     flags: ConnectionFlags = [],
-    streamVlanID: UInt16 = 0
+    streamVlanID: UInt16 = 0,
+    connectedListenersEntries: UInt16 = 0,
+    ipFlags: UInt16 = 0,
+    sourcePort: UInt16 = 0,
+    destinationPort: UInt16 = 0,
+    sourceIPAddress: [UInt8] = [UInt8](repeating: 0, count: 16),
+    destinationIPAddress: [UInt8] = [UInt8](repeating: 0, count: 16)
   ) {
     self.messageType = messageType
     self.status = status
@@ -93,6 +112,18 @@ public struct Acmpdu: Sendable, Hashable, CustomStringConvertible {
     self.sequenceID = sequenceID
     self.flags = flags
     self.streamVlanID = streamVlanID
+    self.connectedListenersEntries = connectedListenersEntries
+    self.ipFlags = ipFlags
+    self.sourcePort = sourcePort
+    self.destinationPort = destinationPort
+    self.sourceIPAddress = sourceIPAddress
+    self.destinationIPAddress = destinationIPAddress
+  }
+
+  /// Whether any IEEE 1722.1-2021 IP field is set, so that the longer ACMPDU is needed.
+  var hasIPFields: Bool {
+    ipFlags != 0 || sourcePort != 0 || destinationPort != 0 ||
+      sourceIPAddress.contains { $0 != 0 } || destinationIPAddress.contains { $0 != 0 }
   }
 
   public var talkerStream: StreamIdentification {
@@ -126,7 +157,13 @@ public struct Acmpdu: Sendable, Hashable, CustomStringConvertible {
       lhs.connectionCount == rhs.connectionCount &&
       lhs.sequenceID == rhs.sequenceID &&
       lhs.flags == rhs.flags &&
-      lhs.streamVlanID == rhs.streamVlanID
+      lhs.streamVlanID == rhs.streamVlanID &&
+      lhs.connectedListenersEntries == rhs.connectedListenersEntries &&
+      lhs.ipFlags == rhs.ipFlags &&
+      lhs.sourcePort == rhs.sourcePort &&
+      lhs.destinationPort == rhs.destinationPort &&
+      lhs.sourceIPAddress == rhs.sourceIPAddress &&
+      lhs.destinationIPAddress == rhs.destinationIPAddress
   }
 
   public func hash(into hasher: inout Hasher) {
@@ -143,6 +180,12 @@ public struct Acmpdu: Sendable, Hashable, CustomStringConvertible {
     hasher.combine(sequenceID)
     hasher.combine(flags)
     hasher.combine(streamVlanID)
+    hasher.combine(connectedListenersEntries)
+    hasher.combine(ipFlags)
+    hasher.combine(sourcePort)
+    hasher.combine(destinationPort)
+    hasher.combine(sourceIPAddress)
+    hasher.combine(destinationIPAddress)
   }
 }
 
@@ -168,7 +211,21 @@ extension Acmpdu: SerDes {
     sequenceID = try UInt16(parsingBigEndian: &input)
     flags = try ConnectionFlags(rawValue: UInt16(parsingBigEndian: &input))
     streamVlanID = try UInt16(parsingBigEndian: &input)
-    _ = try UInt16(parsingBigEndian: &input) // reserved
+    connectedListenersEntries = try UInt16(parsingBigEndian: &input)
+    if header.controlDataLength >= Self.ieee2021Length {
+      ipFlags = try UInt16(parsingBigEndian: &input)
+      _ = try UInt16(parsingBigEndian: &input) // reserved
+      sourcePort = try UInt16(parsingBigEndian: &input)
+      destinationPort = try UInt16(parsingBigEndian: &input)
+      sourceIPAddress = try [UInt8](parsing: &input, byteCount: 16)
+      destinationIPAddress = try [UInt8](parsing: &input, byteCount: 16)
+    } else {
+      ipFlags = 0
+      sourcePort = 0
+      destinationPort = 0
+      sourceIPAddress = [UInt8](repeating: 0, count: 16)
+      destinationIPAddress = [UInt8](repeating: 0, count: 16)
+    }
   }
 
   public func serialize(into serializationContext: inout SerializationContext) throws {
@@ -176,7 +233,7 @@ extension Acmpdu: SerDes {
       subtype: .acmp,
       controlData: messageType.rawValue,
       status: status,
-      controlDataLength: Self.length,
+      controlDataLength: hasIPFields ? Self.ieee2021Length : Self.length,
       streamID: streamID.rawValue
     )
     try serializationContext.serialize(header)
@@ -190,6 +247,16 @@ extension Acmpdu: SerDes {
     serializationContext.serialize(uint16: sequenceID)
     serializationContext.serialize(uint16: flags.rawValue)
     serializationContext.serialize(uint16: streamVlanID)
+    serializationContext.serialize(uint16: connectedListenersEntries)
+    guard hasIPFields else { return }
+    guard sourceIPAddress.count == 16, destinationIPAddress.count == 16 else {
+      throw AvdeccCodecError.valueTooLarge
+    }
+    serializationContext.serialize(uint16: ipFlags)
     serializationContext.serialize(uint16: 0) // reserved
+    serializationContext.serialize(uint16: sourcePort)
+    serializationContext.serialize(uint16: destinationPort)
+    serializationContext.serialize(sourceIPAddress)
+    serializationContext.serialize(destinationIPAddress)
   }
 }

@@ -112,6 +112,32 @@ final class PduTests: XCTestCase {
     XCTAssertEqual(try parse(bytes), .acmp(acmpdu))
   }
 
+  // IEEE 1722.1-2021 adds connected_listeners_entries in the 2013 reserved field, and IP fields
+  // that lengthen control_data_length to 84 (Figure 8-1)
+  func testAcmpduIeee2021Fields() throws {
+    let sourceIPAddress = [UInt8](repeating: 0, count: 10) + [0xFF, 0xFF, 192, 168, 1, 2]
+    let acmpdu = Acmpdu(
+      messageType: .getTxStateResponse,
+      talkerEntityID: UniqueIdentifier(0x001B_92FF_FE01_0203),
+      flags: [.clEntriesValid],
+      connectedListenersEntries: 3,
+      sourcePort: 17220,
+      sourceIPAddress: sourceIPAddress
+    )
+    let bytes = try acmpdu.serialized()
+    XCTAssertEqual(bytes.count, AvtpduControlHeader.length + Int(Acmpdu.ieee2021Length))
+    XCTAssertEqual(Array(bytes[54..<56]), [0x00, 0x03]) // connected_listeners_entries
+    XCTAssertEqual(Array(bytes[60..<62]), [0x43, 0x44]) // source_port
+    XCTAssertEqual(Array(bytes[64..<80]), sourceIPAddress)
+    XCTAssertEqual(try parse(bytes), .acmp(acmpdu))
+
+    // without IP fields the 1722.1-2013 length is sent
+    let short = Acmpdu(messageType: .getTxStateResponse, connectedListenersEntries: 3)
+    let shortBytes = try short.serialized()
+    XCTAssertEqual(shortBytes.count, AvtpduControlHeader.length + Int(Acmpdu.length))
+    XCTAssertEqual(try parse(shortBytes), .acmp(short))
+  }
+
   func testAemAecpduRoundTrip() throws {
     let aem = AemAecpdu(
       isResponse: false,

@@ -41,15 +41,19 @@ public struct StreamConnectionState: Sendable, Hashable {
   public let listenerStream: StreamIdentification
   public let connectionCount: UInt16
   public let flags: ConnectionFlags
+  /// The number of entries in a talker's connected listeners array, when the response carries
+  /// it (CL_ENTRIES_VALID, IEEE 1722.1-2021 §8.2.1.18).
+  public let connectedListenersEntries: UInt16?
 
   public init(
     talkerStream: StreamIdentification, listenerStream: StreamIdentification,
-    connectionCount: UInt16, flags: ConnectionFlags
+    connectionCount: UInt16, flags: ConnectionFlags, connectedListenersEntries: UInt16? = nil
   ) {
     self.talkerStream = talkerStream
     self.listenerStream = listenerStream
     self.connectionCount = connectionCount
     self.flags = flags
+    self.connectedListenersEntries = connectedListenersEntries
   }
 
   init(_ acmpdu: Acmpdu) {
@@ -57,7 +61,8 @@ public struct StreamConnectionState: Sendable, Hashable {
       talkerStream: acmpdu.talkerStream,
       listenerStream: acmpdu.listenerStream,
       connectionCount: acmpdu.connectionCount,
-      flags: acmpdu.flags
+      flags: acmpdu.flags,
+      connectedListenersEntries: acmpdu.flags.contains(.clEntriesValid) ? acmpdu.connectedListenersEntries : nil
     )
   }
 }

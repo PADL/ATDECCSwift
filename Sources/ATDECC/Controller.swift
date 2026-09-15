@@ -1228,7 +1228,8 @@ public actor Controller<Port: NetworkPort> {
     _ messageType: AcmpMessageType,
     talker: StreamIdentification,
     listener: StreamIdentification,
-    connectionCount: UInt16 = 0
+    connectionCount: UInt16 = 0,
+    flags: ConnectionFlags = []
   ) async throws -> StreamConnectionState {
     guard !_isClosed else { throw AcmpStatus.internalError }
 
@@ -1242,7 +1243,8 @@ public actor Controller<Port: NetworkPort> {
       talkerUniqueID: talker.streamIndex,
       listenerUniqueID: listener.streamIndex,
       connectionCount: connectionCount,
-      sequenceID: sequenceID
+      sequenceID: sequenceID,
+      flags: flags
     )
     let promise = Promise<Acmpdu>()
     let timer = Timer(label: "ACMP #\(sequenceID)") { [weak self] in
@@ -1267,12 +1269,7 @@ public actor Controller<Port: NetworkPort> {
     guard response.status == AcmpStatus.success.rawValue else {
       throw AcmpStatus(UInt16(response.status))
     }
-    return StreamConnectionState(
-      talkerStream: response.talkerStream,
-      listenerStream: response.listenerStream,
-      connectionCount: response.connectionCount,
-      flags: response.flags
-    )
+    return StreamConnectionState(response)
   }
 
   private func _completeAcmpCommand(sequenceID: UInt16, with result: Result<Acmpdu, any Error>) {
@@ -1328,12 +1325,7 @@ public actor Controller<Port: NetworkPort> {
       !_controllerAcmpResponses.contains(acmpdu.messageType)
     else { return }
 
-    let state = StreamConnectionState(
-      talkerStream: acmpdu.talkerStream,
-      listenerStream: acmpdu.listenerStream,
-      connectionCount: acmpdu.connectionCount,
-      flags: acmpdu.flags
-    )
+    let state = StreamConnectionState(acmpdu)
     let status = AcmpStatus(UInt16(acmpdu.status))
 
     switch acmpdu.messageType {
@@ -2479,10 +2471,12 @@ public extension Controller {
 public extension Controller {
   /// Connects a listener stream to a talker stream: CONNECT_RX_COMMAND to the listener
   /// (IEEE 1722.1-2021 §8.2.3).
+  /// `flags` are the requested connection's, such as CLASS_B or STREAMING_WAIT (IEEE 1722.1-2021
+  /// Table 8-4).
   func connectStream(
-    talker: StreamIdentification, listener: StreamIdentification
+    talker: StreamIdentification, listener: StreamIdentification, flags: ConnectionFlags = []
   ) async throws -> StreamConnectionState {
-    try await _acmp(.connectRxCommand, talker: talker, listener: listener)
+    try await _acmp(.connectRxCommand, talker: talker, listener: listener, flags: flags)
   }
 
   /// DISCONNECT_RX_COMMAND to the listener.
