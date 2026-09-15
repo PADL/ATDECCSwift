@@ -321,6 +321,26 @@ public struct AsPath: Sendable, Hashable, CustomStringConvertible {
 
 /// The 32 counters returned by GET_COUNTERS (IEEE 1722.1-2021 §7.4.42.2); the valid flags,
 /// typed per descriptor, say which are meaningful.
+/// An ENTITY_AVAILABLE response (IEEE 1722.1-2021 §7.4.3.2); an IEEE 1722.1-2013 entity reports
+/// no flags and no controllers.
+public struct EntityAvailability: Sendable, Hashable {
+  public var flags: EntityAvailableFlags
+  /// Zero when the entity is not acquired.
+  public var acquiredControllerID: UniqueIdentifier
+  /// Zero when the entity is not locked.
+  public var lockedControllerID: UniqueIdentifier
+
+  public init(
+    flags: EntityAvailableFlags = [],
+    acquiredControllerID: UniqueIdentifier = UniqueIdentifier(0),
+    lockedControllerID: UniqueIdentifier = UniqueIdentifier(0)
+  ) {
+    self.flags = flags
+    self.acquiredControllerID = acquiredControllerID
+    self.lockedControllerID = lockedControllerID
+  }
+}
+
 public struct DescriptorCounters: Sendable, Hashable {
   public typealias Counters = InlineArray<32, UInt32>
 

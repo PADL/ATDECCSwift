@@ -345,7 +345,25 @@ final class PayloadTests: XCTestCase {
     XCTAssertEqual(counters[31], 31)
   }
 
+  // an IEEE 1722.1-2021 entity reports its acquiring and locking controllers (§7.4.3.2); an
+  // IEEE 1722.1-2013 one sends no payload
+  func testEntityAvailableResponse() throws {
+    let lockingController = UniqueIdentifier(0x0011_22FF_FE33_4455)
+    let data = be32(EntityAvailableFlags.entityLocked.rawValue) + be64(0) + be64(lockingController.rawValue)
+    guard case let .entityAvailable(availability) =
+      try AemResponsePayload(commandTypeRaw: AemCommandType.entityAvailable.rawValue, data: data)
+    else { return XCTFail("expected ENTITY_AVAILABLE") }
+    XCTAssertEqual(availability, EntityAvailability(flags: .entityLocked, lockedControllerID: lockingController))
+    XCTAssertEqual(
+      try AemResponsePayload(commandTypeRaw: AemCommandType.entityAvailable.rawValue, data: []),
+      .entityAvailable(EntityAvailability())
+    )
+  }
+
   func testCounterValidFlagsWireValues() {
+    // Milan 1.3 Table 5.14: signal presence counters
+    XCTAssertEqual(StreamOutputCounterValidFlags.entitySpecific9.rawValue, 0x0080_0000)
+    XCTAssertEqual(StreamOutputCounterValidFlags.entitySpecific10.rawValue, 0x0040_0000)
     // IEEE 1722.1-2021 Tables 7-150 to 7-158 number bits MSB-first: bit 31 is 0x0000_0001
     XCTAssertEqual(EntityCounterValidFlags.entitySpecific1.rawValue, 0x8000_0000)
     XCTAssertEqual(AvbInterfaceCounterValidFlags.linkUp.rawValue, 0x0000_0001)

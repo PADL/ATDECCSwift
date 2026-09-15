@@ -510,7 +510,7 @@ public enum AemResponsePayload: Sendable, Hashable {
     descriptorType: DescriptorType,
     descriptorIndex: DescriptorIndex
   )
-  case entityAvailable
+  case entityAvailable(EntityAvailability)
   case controllerAvailable
   case readDescriptor(
     configurationIndex: UInt16,
@@ -668,7 +668,13 @@ public enum AemResponsePayload: Sendable, Hashable {
           descriptorIndex: UInt16(parsingBigEndian: &input)
         )
       case .entityAvailable:
-        return .entityAvailable
+        // IEEE 1722.1-2013 entities, like la_avdecc, send no payload
+        guard input.count >= 20 else { return .entityAvailable(EntityAvailability()) }
+        return try .entityAvailable(EntityAvailability(
+          flags: EntityAvailableFlags(rawValue: UInt32(parsingBigEndian: &input)),
+          acquiredControllerID: UniqueIdentifier(parsing: &input),
+          lockedControllerID: UniqueIdentifier(parsing: &input)
+        ))
       case .controllerAvailable:
         return .controllerAvailable
       case .readDescriptor:

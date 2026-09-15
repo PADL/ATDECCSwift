@@ -1405,8 +1405,11 @@ public extension Controller {
   }
 
   /// ENTITY_AVAILABLE (IEEE 1722.1-2021 §7.4.3).
-  func queryEntityAvailable(id targetEntityID: UniqueIdentifier) async throws {
-    _ = try await _aem(targetEntityID, .entityAvailable)
+  @discardableResult
+  func queryEntityAvailable(id targetEntityID: UniqueIdentifier) async throws -> EntityAvailability {
+    guard case let .entityAvailable(availability) = try await _aem(targetEntityID, .entityAvailable)
+    else { throw AemStatus.protocolError }
+    return availability
   }
 
   /// CONTROLLER_AVAILABLE (IEEE 1722.1-2021 §7.4.4).

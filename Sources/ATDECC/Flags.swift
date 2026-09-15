@@ -309,6 +309,10 @@ public struct StreamOutputCounterValidFlags: OptionSet, Sendable, Hashable {
   public static let timestampValid = StreamOutputCounterValidFlags(rawValue: 1 << 5)
   public static let timestampNotValid = StreamOutputCounterValidFlags(rawValue: 1 << 6)
   public static let framesTx = StreamOutputCounterValidFlags(rawValue: 1 << 7)
+  /// Milan's signal presence on channels 0 to 31 and 32 to 59 (Milan 1.3 Table 5.14); see
+  /// `DescriptorCounters.signalPresentChannels(valid:)`.
+  public static let entitySpecific10 = StreamOutputCounterValidFlags(rawValue: 1 << 22)
+  public static let entitySpecific9 = StreamOutputCounterValidFlags(rawValue: 1 << 23)
   public static let entitySpecific8 = StreamOutputCounterValidFlags(rawValue: 1 << 24)
   public static let entitySpecific7 = StreamOutputCounterValidFlags(rawValue: 1 << 25)
   public static let entitySpecific6 = StreamOutputCounterValidFlags(rawValue: 1 << 26)
@@ -317,6 +321,26 @@ public struct StreamOutputCounterValidFlags: OptionSet, Sendable, Hashable {
   public static let entitySpecific3 = StreamOutputCounterValidFlags(rawValue: 1 << 29)
   public static let entitySpecific2 = StreamOutputCounterValidFlags(rawValue: 1 << 30)
   public static let entitySpecific1 = StreamOutputCounterValidFlags(rawValue: 1 << 31)
+}
+
+public extension DescriptorCounters {
+  /// The STREAM_OUTPUT channels carrying an audio signal (Milan 1.3 §5.3.7.7.1): channel 0 is the
+  /// most significant bit of ENTITY_SPECIFIC_9, and channels 32 to 59 follow in ENTITY_SPECIFIC_10.
+  /// nil when neither counter is valid.
+  func signalPresentChannels(valid: StreamOutputCounterValidFlags) -> [Int]? {
+    let slots: [(flag: StreamOutputCounterValidFlags, firstChannel: Int, channels: Int)] = [
+      (.entitySpecific9, 0, 32),
+      (.entitySpecific10, 32, 28),
+    ]
+    var present: [Int]?
+    for slot in slots where valid.contains(slot.flag) {
+      // a counter is at the index of its valid flag's bit (IEEE 1722.1-2021 §7.4.42.2)
+      let bits = self[slot.flag.rawValue.trailingZeroBitCount]
+      present = (present ?? []) + (0..<slot.channels).filter { bits & (0x8000_0000 >> UInt32($0)) != 0 }
+        .map { slot.firstChannel + $0 }
+    }
+    return present
+  }
 }
 
 /// Valid-counter flags for STREAM_OUTPUT GET_COUNTERS from a Milan 1.2 entity

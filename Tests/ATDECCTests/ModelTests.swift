@@ -203,6 +203,18 @@ final class ModelTests: XCTestCase {
     XCTAssertEqual(counters[31], 31)
   }
 
+  // channel 0 is ENTITY_SPECIFIC_9's most significant bit; 32 to 59 follow in ENTITY_SPECIFIC_10
+  // (Milan 1.3 Figures 5.2 and 5.3)
+  func testSignalPresentChannels() {
+    var values = [UInt32](repeating: 0, count: DescriptorCounters.count)
+    values[23] = 0x8000_0001 // ENTITY_SPECIFIC_9: channels 0 and 31
+    values[22] = 0x4000_0010 // ENTITY_SPECIFIC_10: channels 33 and 59
+    let counters = DescriptorCounters(values)
+    XCTAssertEqual(counters.signalPresentChannels(valid: [.entitySpecific9, .entitySpecific10]), [0, 31, 33, 59])
+    XCTAssertEqual(counters.signalPresentChannels(valid: .entitySpecific9), [0, 31])
+    XCTAssertNil(counters.signalPresentChannels(valid: .streamStart))
+  }
+
   func testCounterValidFlags() {
     let streamFlags: StreamInputCounterValidFlags = [.mediaLocked, .framesRx]
     XCTAssertTrue(streamFlags.contains(.framesRx))
