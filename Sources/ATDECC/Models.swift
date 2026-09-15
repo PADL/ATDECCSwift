@@ -124,9 +124,11 @@ struct ProbingAcmpStatus {
 }
 
 /// GET_STREAM_INFO / SET_STREAM_INFO dynamic information (IEEE 1722.1-2021 §7.4.16.2), with
-/// the Milan extension fields when the entity reports them (Milan 1.3 §5.4.2.9).
+/// the pre-1.3 Milan extension fields when the entity reports them.
 ///
-/// Every field is settable: the typical write flow is GET, mutate a field, SET.
+/// A SET carries only the fields its flags mark valid, so build it from an empty value rather
+/// than a GET response, which reports state such as CONNECTED and MSRP_ACC_LAT_VALID; Milan
+/// entities reject MSRP_ACC_LAT_VALID, and set a presentation time with SET_MAX_TRANSIT_TIME.
 public struct StreamInfo: Sendable, Hashable, CustomStringConvertible {
   public var streamFormat: StreamFormat
   public var streamID: UniqueIdentifier

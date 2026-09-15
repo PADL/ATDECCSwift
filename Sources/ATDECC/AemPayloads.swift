@@ -988,17 +988,25 @@ extension StreamInfo {
     }
   }
 
+  /// The flags a SET_STREAM_INFO command can carry; the rest report state in a response.
+  static let commandFlags: StreamInfoFlags = [
+    .classB, .streamVlanIDValid, .streamDestMacValid, .msrpAccLatValid, .streamIDValid, .streamFormatValid,
+  ]
+
   /// Serializes the SET_STREAM_INFO fields following descriptor_type and descriptor_index,
-  /// in the 1722.1-2013 layout, which every entity accepts.
+  /// in the 1722.1-2013 layout, which every entity accepts. Response-only flags are dropped
+  /// and the MSRP failure fields are zero (IEEE 1722.1-2021 §7.4.15.1); the latency is sent
+  /// only with MSRP_ACC_LAT_VALID, which Milan 1.3 entities reject (Milan 1.3 §5.4.2.9).
   func serialize(into context: inout SerializationContext) throws {
-    context.serialize(uint32: streamInfoFlags.rawValue)
+    let flags = streamInfoFlags.intersection(Self.commandFlags)
+    context.serialize(uint32: flags.rawValue)
     try context.serialize(streamFormat)
     try context.serialize(streamID)
-    context.serialize(uint32: msrpAccumulatedLatency)
+    context.serialize(uint32: flags.contains(.msrpAccLatValid) ? msrpAccumulatedLatency : 0)
     context.serialize(eui48: streamDestMac)
-    context.serialize(uint8: msrpFailureCode)
+    context.serialize(uint8: 0) // msrp_failure_code
     context.serialize(uint8: 0) // reserved
-    context.serialize(uint64: msrpFailureBridgeID)
+    context.serialize(uint64: 0) // msrp_failure_bridge_id
     context.serialize(uint16: streamVlanID)
     context.serialize(uint16: 0) // reserved
   }

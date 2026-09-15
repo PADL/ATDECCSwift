@@ -254,6 +254,30 @@ final class PayloadTests: XCTestCase {
     XCTAssertEqual(try AemCommandPayload(commandTypeRaw: command.commandTypeRaw, data: bytes), command)
   }
 
+  // response-only flags, MSRP failure fields and an unflagged latency stay off the wire (§7.4.15.1)
+  func testSetStreamInfoCommandDropsResponseState() throws {
+    let command = AemCommandPayload.setStreamInfo(
+      descriptorType: .streamOutput,
+      descriptorIndex: 1,
+      streamInfo: StreamInfo(
+        msrpAccumulatedLatency: 1000,
+        streamVlanID: 2,
+        streamInfoFlags: [.streamVlanIDValid, .connected, .registeringFailed, .msrpFailureValid],
+        msrpFailureCode: 4,
+        msrpFailureBridgeID: 5
+      )
+    )
+    let bytes = try command.serialized()
+    XCTAssertEqual(Array(bytes[4..<8]), [0x02, 0x00, 0x00, 0x00]) // STREAM_VLAN_ID_VALID only
+    guard case let .setStreamInfo(_, _, info) =
+      try AemCommandPayload(commandTypeRaw: command.commandTypeRaw, data: bytes)
+    else { return XCTFail("not a SET_STREAM_INFO") }
+    XCTAssertEqual(info.msrpAccumulatedLatency, 0)
+    XCTAssertEqual(info.msrpFailureCode, 0)
+    XCTAssertEqual(info.msrpFailureBridgeID, 0)
+    XCTAssertEqual(info.streamVlanID, 2)
+  }
+
   func testMemoryObjectLengthFieldOrder() throws {
     let command = AemCommandPayload.setMemoryObjectLength(
       configurationIndex: 1,
