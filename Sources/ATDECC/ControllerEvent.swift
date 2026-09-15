@@ -68,6 +68,10 @@ public enum ControllerEvent: Sendable {
   case streamOutputStopped(UniqueIdentifier, streamIndex: UInt16)
   /// `maxTransitTime` is in nanoseconds.
   case maxTransitTimeChanged(UniqueIdentifier, streamIndex: UInt16, maxTransitTime: UInt64)
+  case streamBackupChanged(UniqueIdentifier, descriptorType: UInt16, descriptorIndex: UInt16, backup: StreamBackup)
+  case videoClusterSamplingRateRangeChanged(UniqueIdentifier, videoClusterIndex: UInt16, samplingRateRange: UInt64)
+  /// A descriptor another controller wrote (IEEE 1722.1-2021 §7.4.6).
+  case descriptorWritten(UniqueIdentifier, configurationIndex: UInt16, descriptorIndex: UInt16, descriptor: Descriptor)
 
   case entityNameChanged(UniqueIdentifier, name: String)
   case entityGroupNameChanged(UniqueIdentifier, name: String)
@@ -154,7 +158,8 @@ public extension ControllerEvent {
     case let .streamInputInfoChanged(id, _, _, _), let .streamOutputInfoChanged(id, _, _, _),
          let .streamInputStarted(id, _), let .streamOutputStarted(id, _),
          let .streamInputStopped(id, _), let .streamOutputStopped(id, _),
-         let .maxTransitTimeChanged(id, _, _):
+         let .maxTransitTimeChanged(id, _, _), let .streamBackupChanged(id, _, _, _),
+         let .videoClusterSamplingRateRangeChanged(id, _, _), let .descriptorWritten(id, _, _, _):
       id
     case let .entityNameChanged(id, _), let .entityGroupNameChanged(id, _),
          let .descriptorNameChanged(id, _, _, _, _):

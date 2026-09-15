@@ -394,6 +394,60 @@ final class PayloadTests: XCTestCase {
     ))
   }
 
+  // Figure 7-92: three backup talkers and the backed up talker, each Entity ID and unique ID
+  func testStreamBackupSamplingRateRangeAndPathLatencyPayloads() throws {
+    let backup = StreamBackup(
+      backupTalker0: StreamIdentification(entityID: UniqueIdentifier(1), streamIndex: 2),
+      backupTalker1: StreamIdentification(entityID: UniqueIdentifier(3), streamIndex: 4),
+      backupTalker2: StreamIdentification(entityID: UniqueIdentifier(0), streamIndex: 0),
+      backedUpTalker: StreamIdentification(entityID: UniqueIdentifier(5), streamIndex: 6)
+    )
+    let setBackup = AemCommandPayload.setStreamBackup(descriptorType: .streamInput, descriptorIndex: 1, backup: backup)
+    let bytes = try setBackup.serialized()
+    XCTAssertEqual(bytes.count, 44)
+    XCTAssertEqual(Array(bytes[4..<14]), be64(1) + be16(2))
+    XCTAssertEqual(try AemCommandPayload(commandTypeRaw: setBackup.commandTypeRaw, data: bytes), setBackup)
+    guard case let .getStreamBackup(_, _, parsed) =
+      try AemResponsePayload(commandTypeRaw: AemCommandType.getStreamBackup.rawValue, data: bytes)
+    else { return XCTFail("expected GET_STREAM_BACKUP") }
+    XCTAssertEqual(parsed, backup)
+
+    // Figure 7-97
+    let setRange = AemCommandPayload.setSamplingRateRange(
+      descriptorType: .videoCluster,
+      descriptorIndex: 0,
+      samplingRateRange: 0x1E
+    )
+    XCTAssertEqual(try setRange.serialized(), be16(DescriptorType.videoCluster.rawValue) + be16(0) + be64(0x1E))
+
+    // Figure 7-137: a 4-octet path_latency
+    guard case let .getPathLatency(_, _, pathLatency) = try AemResponsePayload(
+      commandTypeRaw: AemCommandType.getPathLatency.rawValue,
+      data: be16(DescriptorType.audioCluster.rawValue) + be16(0) + be32(1500)
+    ) else { return XCTFail("expected GET_PATH_LATENCY") }
+    XCTAssertEqual(pathLatency, 1500)
+  }
+
+  // Figure 7-32: WRITE_DESCRIPTOR carries a whole descriptor, as READ_DESCRIPTOR's response does
+  func testWriteDescriptorPayload() throws {
+    let block = be16(DescriptorType.controlBlock.rawValue) + be16(2) + fixedString("Block") + be16(0xFFFF) +
+      be16(4) + be16(0) + be16(3) + be16(DescriptorType.invalid.rawValue) + be16(0) + be16(0)
+    let (_, descriptorIndex, descriptor) = try readDescriptorResponse(block)
+    let command = AemCommandPayload.writeDescriptor(
+      configurationIndex: 0,
+      descriptorIndex: descriptorIndex,
+      descriptor: descriptor
+    )
+    let bytes = try command.serialized()
+    XCTAssertEqual(bytes, be16(0) + be16(0) + block)
+    XCTAssertEqual(try AemCommandPayload(commandTypeRaw: command.commandTypeRaw, data: bytes), command)
+    guard case let .writeDescriptor(_, writtenIndex, written) =
+      try AemResponsePayload(commandTypeRaw: AemCommandType.writeDescriptor.rawValue, data: bytes)
+    else { return XCTFail("expected WRITE_DESCRIPTOR") }
+    XCTAssertEqual(writtenIndex, 2)
+    XCTAssertEqual(written, descriptor)
+  }
+
   func testMemoryObjectLengthFieldOrder() throws {
     let command = AemCommandPayload.setMemoryObjectLength(
       configurationIndex: 1,

@@ -141,6 +141,12 @@ public enum AemCommandPayload: Sendable, Hashable {
     maxTransitTime: UInt64
   )
   case getMaxTransitTime(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case writeDescriptor(configurationIndex: UInt16, descriptorIndex: DescriptorIndex, descriptor: Descriptor)
+  case setStreamBackup(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, backup: StreamBackup)
+  case getStreamBackup(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case setSamplingRateRange(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, samplingRateRange: UInt64)
+  case getSamplingRateRange(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  case getPathLatency(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
   /// Fixed-size GET commands answered together (IEEE 1722.1-2021 §7.4.76).
   case getDynamicInfo(commands: [AemCommandPayload])
   /// A command without a dedicated model.
@@ -190,6 +196,12 @@ public enum AemCommandPayload: Sendable, Hashable {
     case .getMemoryObjectLength: AemCommandType.getMemoryObjectLength.rawValue
     case .setMaxTransitTime: AemCommandType.setMaxTransitTime.rawValue
     case .getMaxTransitTime: AemCommandType.getMaxTransitTime.rawValue
+    case .writeDescriptor: AemCommandType.writeDescriptor.rawValue
+    case .setStreamBackup: AemCommandType.setStreamBackup.rawValue
+    case .getStreamBackup: AemCommandType.getStreamBackup.rawValue
+    case .setSamplingRateRange: AemCommandType.setSamplingRateRange.rawValue
+    case .getSamplingRateRange: AemCommandType.getSamplingRateRange.rawValue
+    case .getPathLatency: AemCommandType.getPathLatency.rawValue
     case .getDynamicInfo: AemCommandType.getDynamicInfo.rawValue
     case let .other(commandType, _): commandType
     }
@@ -241,7 +253,10 @@ public enum AemCommandPayload: Sendable, Hashable {
          let .getAvbInfo(descriptorType, descriptorIndex),
          let .getCounters(descriptorType, descriptorIndex),
          let .reboot(descriptorType, descriptorIndex),
-         let .getMaxTransitTime(descriptorType, descriptorIndex):
+         let .getMaxTransitTime(descriptorType, descriptorIndex),
+         let .getStreamBackup(descriptorType, descriptorIndex),
+         let .getSamplingRateRange(descriptorType, descriptorIndex),
+         let .getPathLatency(descriptorType, descriptorIndex):
       try context.serialize(descriptorType)
       context.serialize(uint16: descriptorIndex)
     case let .setStreamInfo(descriptorType, descriptorIndex, streamInfo):
@@ -313,6 +328,18 @@ public enum AemCommandPayload: Sendable, Hashable {
       try context.serialize(descriptorType)
       context.serialize(uint16: descriptorIndex)
       context.serialize(uint64: maxTransitTime)
+    case let .writeDescriptor(configurationIndex, descriptorIndex, descriptor):
+      context.serialize(uint16: configurationIndex)
+      context.serialize(uint16: 0) // reserved
+      try descriptor.serialize(descriptorIndex: descriptorIndex, into: &context)
+    case let .setStreamBackup(descriptorType, descriptorIndex, backup):
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      try backup.serialize(into: &context)
+    case let .setSamplingRateRange(descriptorType, descriptorIndex, samplingRateRange):
+      try context.serialize(descriptorType)
+      context.serialize(uint16: descriptorIndex)
+      context.serialize(uint64: samplingRateRange)
     case let .getDynamicInfo(commands):
       for command in commands {
         let data = try command.serialized()
@@ -519,6 +546,36 @@ public enum AemCommandPayload: Sendable, Hashable {
       case .getMaxTransitTime:
         let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
         return .getMaxTransitTime(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .writeDescriptor:
+        let (configurationIndex, descriptorIndex, descriptor) = try _parseDescriptorPayload(&input)
+        return .writeDescriptor(
+          configurationIndex: configurationIndex,
+          descriptorIndex: descriptorIndex,
+          descriptor: descriptor
+        )
+      case .setStreamBackup:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setStreamBackup(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          backup: StreamBackup(parsing: &input)
+        )
+      case .getStreamBackup:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getStreamBackup(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .setSamplingRateRange:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setSamplingRateRange(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          samplingRateRange: UInt64(parsingBigEndian: &input)
+        )
+      case .getSamplingRateRange:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getSamplingRateRange(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .getPathLatency:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return .getPathLatency(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
       case .getDynamicInfo:
         return try .getDynamicInfo(commands: _parseDynamicInfos(&input).map {
           try AemCommandPayload(commandTypeRaw: $0.commandTypeRaw, data: $0.data)
@@ -693,6 +750,14 @@ public enum AemResponsePayload: Sendable, Hashable {
     descriptorIndex: DescriptorIndex,
     maxTransitTime: UInt64
   )
+  /// The descriptor as the entity holds it after the command.
+  case writeDescriptor(configurationIndex: UInt16, descriptorIndex: DescriptorIndex, descriptor: Descriptor)
+  case setStreamBackup(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, backup: StreamBackup)
+  case getStreamBackup(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, backup: StreamBackup)
+  case setSamplingRateRange(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, samplingRateRange: UInt64)
+  case getSamplingRateRange(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, samplingRateRange: UInt64)
+  /// `pathLatency` is in nanoseconds.
+  case getPathLatency(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex, pathLatency: UInt32)
   case getDynamicInfo([DynamicInfo])
   /// A response without a dedicated model.
   case other(commandType: UInt16, data: [UInt8])
@@ -726,19 +791,11 @@ public enum AemResponsePayload: Sendable, Hashable {
       case .controllerAvailable:
         return .controllerAvailable
       case .readDescriptor:
-        let configurationIndex = try UInt16(parsingBigEndian: &input)
-        _ = try UInt16(parsingBigEndian: &input) // reserved
-        // descriptor offsets count from descriptor_type, so give the descriptor its own origin
-        var descriptorInput = input.extractRemaining()
-        let descriptorTypeRaw = try UInt16(parsingBigEndian: &descriptorInput)
-        let descriptorIndex = try UInt16(parsingBigEndian: &descriptorInput)
-        return try .readDescriptor(
+        let (configurationIndex, descriptorIndex, descriptor) = try _parseDescriptorPayload(&input)
+        return .readDescriptor(
           configurationIndex: configurationIndex,
           descriptorIndex: descriptorIndex,
-          descriptor: Descriptor(
-            descriptorTypeRaw: descriptorTypeRaw,
-            parsingBody: &descriptorInput
-          )
+          descriptor: descriptor
         )
       case .setConfiguration:
         _ = try UInt16(parsingBigEndian: &input) // reserved
@@ -960,6 +1017,45 @@ public enum AemResponsePayload: Sendable, Hashable {
           descriptorIndex: UInt16(parsingBigEndian: &input),
           maxTransitTime: UInt64(parsingBigEndian: &input)
         )
+      case .writeDescriptor:
+        let (configurationIndex, descriptorIndex, descriptor) = try _parseDescriptorPayload(&input)
+        return .writeDescriptor(
+          configurationIndex: configurationIndex,
+          descriptorIndex: descriptorIndex,
+          descriptor: descriptor
+        )
+      case .setStreamBackup:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .setStreamBackup(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          backup: StreamBackup(parsing: &input)
+        )
+      case .getStreamBackup:
+        let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
+        return try .getStreamBackup(
+          descriptorType: descriptorType,
+          descriptorIndex: descriptorIndex,
+          backup: StreamBackup(parsing: &input)
+        )
+      case .setSamplingRateRange:
+        return try .setSamplingRateRange(
+          descriptorType: DescriptorType(parsing: &input),
+          descriptorIndex: UInt16(parsingBigEndian: &input),
+          samplingRateRange: UInt64(parsingBigEndian: &input)
+        )
+      case .getSamplingRateRange:
+        return try .getSamplingRateRange(
+          descriptorType: DescriptorType(parsing: &input),
+          descriptorIndex: UInt16(parsingBigEndian: &input),
+          samplingRateRange: UInt64(parsingBigEndian: &input)
+        )
+      case .getPathLatency:
+        return try .getPathLatency(
+          descriptorType: DescriptorType(parsing: &input),
+          descriptorIndex: UInt16(parsingBigEndian: &input),
+          pathLatency: UInt32(parsingBigEndian: &input)
+        )
       case .getDynamicInfo:
         return try .getDynamicInfo(_parseDynamicInfos(&input).map {
           DynamicInfo(commandTypeRaw: $0.commandTypeRaw, statusRaw: $0.statusRaw, data: $0.data)
@@ -1051,6 +1147,21 @@ private func _parseDynamicInfos(
     infos.append((commandTypeRaw, statusRaw, try [UInt8](parsing: &input, byteCount: Int(length))))
   }
   return infos
+}
+
+// READ_DESCRIPTOR's response and WRITE_DESCRIPTOR (IEEE 1722.1-2021 Figures 7-31 and 7-32):
+// configuration_index, reserved, then a whole descriptor, whose offsets count from its
+// descriptor_type, so it is given its own origin.
+private func _parseDescriptorPayload(
+  _ input: inout ParserSpan
+) throws -> (UInt16, DescriptorIndex, Descriptor) {
+  let configurationIndex = try UInt16(parsingBigEndian: &input)
+  _ = try UInt16(parsingBigEndian: &input) // reserved
+  var descriptorInput = input.extractRemaining()
+  let descriptorTypeRaw = try UInt16(parsingBigEndian: &descriptorInput)
+  let descriptorIndex = try UInt16(parsingBigEndian: &descriptorInput)
+  let descriptor = try Descriptor(descriptorTypeRaw: descriptorTypeRaw, parsingBody: &descriptorInput)
+  return (configurationIndex, descriptorIndex, descriptor)
 }
 
 // INCREMENT/DECREMENT_CONTROL: descriptor, index_count, reserved and index_count value indices
@@ -1175,6 +1286,30 @@ extension StreamInfo {
     context.serialize(uint16: destinationPort)
     context.serialize(sourceIPAddress)
     context.serialize(destinationIPAddress)
+  }
+}
+
+extension StreamBackup {
+  /// Parses the talkers following descriptor_type and descriptor_index (IEEE 1722.1-2021
+  /// Figure 7-92), each an Entity ID and unique ID.
+  init(parsing input: inout ParserSpan) throws {
+    func talker() throws -> StreamIdentification {
+      try StreamIdentification(
+        entityID: UniqueIdentifier(parsing: &input),
+        streamIndex: UInt16(parsingBigEndian: &input)
+      )
+    }
+    backupTalker0 = try talker()
+    backupTalker1 = try talker()
+    backupTalker2 = try talker()
+    backedUpTalker = try talker()
+  }
+
+  func serialize(into context: inout SerializationContext) throws {
+    for talker in [backupTalker0, backupTalker1, backupTalker2, backedUpTalker] {
+      try context.serialize(talker.entityID)
+      context.serialize(uint16: talker.streamIndex)
+    }
   }
 }
 

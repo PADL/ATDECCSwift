@@ -67,6 +67,27 @@ public struct StreamConnectionState: Sendable, Hashable {
   }
 }
 
+/// A stream's backup talkers, primary to tertiary, and the talker it backs up (SET_STREAM_BACKUP and
+/// GET_STREAM_BACKUP, IEEE 1722.1-2021 Figure 7-92).
+public struct StreamBackup: Sendable, Hashable {
+  public var backupTalker0: StreamIdentification
+  public var backupTalker1: StreamIdentification
+  public var backupTalker2: StreamIdentification
+  public var backedUpTalker: StreamIdentification
+
+  public init(
+    backupTalker0: StreamIdentification,
+    backupTalker1: StreamIdentification,
+    backupTalker2: StreamIdentification,
+    backedUpTalker: StreamIdentification
+  ) {
+    self.backupTalker0 = backupTalker0
+    self.backupTalker1 = backupTalker1
+    self.backupTalker2 = backupTalker2
+    self.backedUpTalker = backedUpTalker
+  }
+}
+
 /// One audio map entry, pairing a stream channel with a cluster channel
 /// (IEEE 1722.1-2021 §7.2.19.1).
 public struct AudioMapping: Sendable, Hashable {

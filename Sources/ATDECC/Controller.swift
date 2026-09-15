@@ -1148,10 +1148,19 @@ public actor Controller<Port: NetworkPort> {
          let .getMaxTransitTime(descriptorType, descriptorIndex, maxTransitTime):
       guard descriptorType == .streamOutput else { break }
       _yield(.maxTransitTimeChanged(id, streamIndex: descriptorIndex, maxTransitTime: maxTransitTime))
+    case let .writeDescriptor(configurationIndex, descriptorIndex, descriptor):
+      _yield(.descriptorWritten(id, configurationIndex: configurationIndex, descriptorIndex: descriptorIndex, descriptor: descriptor))
+    case let .setStreamBackup(descriptorType, descriptorIndex, backup),
+         let .getStreamBackup(descriptorType, descriptorIndex, backup):
+      _yield(.streamBackupChanged(id, descriptorType: descriptorType.rawValue, descriptorIndex: descriptorIndex, backup: backup))
+    case let .setSamplingRateRange(descriptorType, descriptorIndex, samplingRateRange),
+         let .getSamplingRateRange(descriptorType, descriptorIndex, samplingRateRange):
+      guard descriptorType == .videoCluster else { break }
+      _yield(.videoClusterSamplingRateRangeChanged(id, videoClusterIndex: descriptorIndex, samplingRateRange: samplingRateRange))
     case let .reboot(descriptorType, descriptorIndex):
       _yield(.entityRebooting(id, descriptorType: descriptorType.rawValue, descriptorIndex: descriptorIndex))
     case .entityAvailable, .controllerAvailable, .readDescriptor, .registerUnsolicitedNotification,
-         .startOperation, .abortOperation, .getDynamicInfo, .other:
+         .startOperation, .abortOperation, .getDynamicInfo, .getPathLatency, .other:
       break
     }
   }
@@ -1793,6 +1802,74 @@ public extension Controller {
       descriptorType: .streamOutput, descriptorIndex: streamIndex
     )) else { throw AemStatus.protocolError }
     return maxTransitTime
+  }
+
+  /// WRITE_DESCRIPTOR (IEEE 1722.1-2021 §7.4.6), which needs the entity acquired; returns the
+  /// descriptor as the entity holds it afterwards.
+  @discardableResult
+  func writeDescriptor(
+    id targetEntityID: UniqueIdentifier,
+    configurationIndex: UInt16,
+    descriptorIndex: DescriptorIndex,
+    descriptor: Descriptor
+  ) async throws -> Descriptor {
+    guard case let .writeDescriptor(_, _, written) = try await _aem(targetEntityID, .writeDescriptor(
+      configurationIndex: configurationIndex, descriptorIndex: descriptorIndex, descriptor: descriptor
+    )) else { throw AemStatus.protocolError }
+    return written
+  }
+
+  /// SET_STREAM_BACKUP (IEEE 1722.1-2021 §7.4.74) on a STREAM_INPUT or STREAM_OUTPUT.
+  @discardableResult
+  func setStreamBackup(
+    id targetEntityID: UniqueIdentifier, descriptorType: DescriptorType, streamIndex: UInt16, to backup: StreamBackup
+  ) async throws -> StreamBackup {
+    guard case let .setStreamBackup(_, _, backup) = try await _aem(targetEntityID, .setStreamBackup(
+      descriptorType: descriptorType, descriptorIndex: streamIndex, backup: backup
+    )) else { throw AemStatus.protocolError }
+    return backup
+  }
+
+  /// GET_STREAM_BACKUP (IEEE 1722.1-2021 §7.4.75) of a STREAM_INPUT or STREAM_OUTPUT.
+  func getStreamBackup(
+    id targetEntityID: UniqueIdentifier, descriptorType: DescriptorType, streamIndex: UInt16
+  ) async throws -> StreamBackup {
+    guard case let .getStreamBackup(_, _, backup) = try await _aem(targetEntityID, .getStreamBackup(
+      descriptorType: descriptorType, descriptorIndex: streamIndex
+    )) else { throw AemStatus.protocolError }
+    return backup
+  }
+
+  /// SET_SAMPLING_RATE_RANGE (IEEE 1722.1-2021 §7.4.79) on a VIDEO_CLUSTER.
+  @discardableResult
+  func setVideoClusterSamplingRateRange(
+    id targetEntityID: UniqueIdentifier, videoClusterIndex: UInt16, to samplingRateRange: UInt64
+  ) async throws -> UInt64 {
+    guard case let .setSamplingRateRange(_, _, range) = try await _aem(targetEntityID, .setSamplingRateRange(
+      descriptorType: .videoCluster, descriptorIndex: videoClusterIndex, samplingRateRange: samplingRateRange
+    )) else { throw AemStatus.protocolError }
+    return range
+  }
+
+  /// GET_SAMPLING_RATE_RANGE (IEEE 1722.1-2021 §7.4.80) of a VIDEO_CLUSTER.
+  func getVideoClusterSamplingRateRange(
+    id targetEntityID: UniqueIdentifier, videoClusterIndex: UInt16
+  ) async throws -> UInt64 {
+    guard case let .getSamplingRateRange(_, _, range) = try await _aem(targetEntityID, .getSamplingRateRange(
+      descriptorType: .videoCluster, descriptorIndex: videoClusterIndex
+    )) else { throw AemStatus.protocolError }
+    return range
+  }
+
+  /// GET_PATH_LATENCY (IEEE 1722.1-2021 §7.4.102) of an AUDIO_CLUSTER, VIDEO_CLUSTER or
+  /// SENSOR_CLUSTER, in nanoseconds.
+  func getPathLatency(
+    id targetEntityID: UniqueIdentifier, descriptorType: DescriptorType, clusterIndex: UInt16
+  ) async throws -> UInt32 {
+    guard case let .getPathLatency(_, _, pathLatency) = try await _aem(targetEntityID, .getPathLatency(
+      descriptorType: descriptorType, descriptorIndex: clusterIndex
+    )) else { throw AemStatus.protocolError }
+    return pathLatency
   }
 
   // MARK: Clocks

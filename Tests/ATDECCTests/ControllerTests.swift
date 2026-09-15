@@ -729,6 +729,28 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  func testUnsolicitedStreamBackup() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    let none = be64(0) + be16(0)
+    try await entity.sendUnsolicited(
+      .setStreamBackup,
+      data: be16(DescriptorType.streamInput.rawValue) + be16(1) + be64(0x0200_00FF_FE00_0003) + be16(0) +
+        none + none + none
+    )
+    let changed = await first(events) {
+      if case .streamBackupChanged(entityID, descriptorType: DescriptorType.streamInput.rawValue, descriptorIndex: 1,
+                                   backup: let backup) = $0
+      {
+        backup.backupTalker0.entityID == UniqueIdentifier(0x0200_00FF_FE00_0003)
+      } else {
+        false
+      }
+    }
+    XCTAssertNotNil(changed)
+    await controller.close()
+  }
+
   func testUnsolicitedRebootIsReported() async throws {
     let controller = try await makeController()
     let events = await controller.events()
