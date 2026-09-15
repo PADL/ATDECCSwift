@@ -245,6 +245,45 @@ final class PayloadTests: XCTestCase {
     XCTAssertEqual(info.streamInfoFlagsEx, .registering)
     XCTAssertEqual(info.probingStatus, .completed)
     XCTAssertEqual(info.acmpStatus, .success)
+    XCTAssertEqual(info.layout, .milanBefore1_3)
+  }
+
+  // IEEE 1722.1-2021 Figure 7-40: ip_flags replaces the reserved field, then the ports and
+  // 16-octet addresses make the payload 84 octets
+  func testIeee2021StreamInfoIPFields() throws {
+    let destination = [UInt8](repeating: 0, count: 10) + [0xFF, 0xFF, 239, 1, 2, 3]
+    var data = be16(DescriptorType.streamOutput.rawValue) + be16(0)
+    data += be32(StreamInfoFlags([.ipDstPortValid, .ipDstAddrValid]).rawValue)
+    data += be64(0) + be64(0) + be32(0) + [UInt8](repeating: 0, count: 8) + be64(0) + be16(2)
+    data += be16(0) + be16(0) + be16(17220) // ip_flags, source_port, destination_port
+    data += [UInt8](repeating: 0, count: 16) + destination
+    XCTAssertEqual(data.count, 84)
+    guard case let .getStreamInfo(_, _, info) =
+      try AemResponsePayload(commandTypeRaw: AemCommandType.getStreamInfo.rawValue, data: data)
+    else { return XCTFail("expected GET_STREAM_INFO") }
+    XCTAssertEqual(info.layout, .ieee1722_1_2021)
+    XCTAssertEqual(info.destinationPort, 17220)
+    XCTAssertEqual(info.destinationIPAddress, destination)
+    XCTAssertEqual(info.streamVlanID, 2)
+
+    // a SET that sets an IP field is sent at 84 octets; one that does not stays at 48
+    let command = AemCommandPayload.setStreamInfo(
+      descriptorType: .streamOutput,
+      descriptorIndex: 0,
+      streamInfo: StreamInfo(
+        streamInfoFlags: .ipDstPortValid,
+        layout: .ieee1722_1_2021,
+        destinationPort: 17220
+      )
+    )
+    let bytes = try command.serialized()
+    XCTAssertEqual(bytes.count, 84)
+    XCTAssertEqual(try AemCommandPayload(commandTypeRaw: command.commandTypeRaw, data: bytes), command)
+    XCTAssertEqual(try AemCommandPayload.setStreamInfo(
+      descriptorType: .streamOutput,
+      descriptorIndex: 0,
+      streamInfo: StreamInfo(streamInfoFlags: .streamVlanIDValid, destinationPort: 17220)
+    ).serialized().count, 48)
   }
 
   func testMilanGetStreamInfoReservedStatus() throws {

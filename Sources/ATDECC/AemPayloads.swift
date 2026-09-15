@@ -1086,7 +1086,7 @@ private func _serializeMemoryObjectIndices(
 extension StreamInfo {
   /// Parses the fields following descriptor_type and descriptor_index in SET_STREAM_INFO and
   /// GET_STREAM_INFO (IEEE 1722.1-2021 §7.4.16.2), accepting the 1722.1-2013 layout, the Milan
-  /// extension and the 1722.1-2021 IP fields (which are skipped).
+  /// extension and the 1722.1-2021 IP fields.
   init(parsing input: inout ParserSpan) throws {
     // the length of the whole payload, including the descriptor fields already consumed
     let payloadLength = input.count + 4
@@ -1102,11 +1102,23 @@ extension StreamInfo {
     streamInfoFlagsEx = nil
     probingStatusRaw = nil
     acmpStatusRaw = nil
+    layout = .ieee1722_1_2013
+    ipFlags = 0
+    sourcePort = 0
+    destinationPort = 0
+    sourceIPAddress = [UInt8](repeating: 0, count: 16)
+    destinationIPAddress = [UInt8](repeating: 0, count: 16)
 
     if payloadLength >= _ieee2021StreamInfoLength {
-      // ip_flags, source_port, destination_port, source_ip_address, destination_ip_address
-      _ = try input.sliceSpan(byteCount: _ieee2021StreamInfoLength - _streamInfoLength + 2)
+      // ip_flags takes the place of the 1722.1-2013 reserved field (Figure 7-40)
+      layout = .ieee1722_1_2021
+      ipFlags = try UInt16(parsingBigEndian: &input)
+      sourcePort = try UInt16(parsingBigEndian: &input)
+      destinationPort = try UInt16(parsingBigEndian: &input)
+      sourceIPAddress = try [UInt8](parsing: &input, byteCount: 16)
+      destinationIPAddress = try [UInt8](parsing: &input, byteCount: 16)
     } else if payloadLength >= _milanStreamInfoLength {
+      layout = .milanBefore1_3
       _ = try UInt16(parsingBigEndian: &input) // reserved
       streamInfoFlagsEx = try StreamInfoFlagsEx(rawValue: UInt32(parsingBigEndian: &input))
       let probingAcmpStatus = try ProbingAcmpStatus(UInt8(parsing: &input))
@@ -1127,12 +1139,21 @@ extension StreamInfo {
     .streamVlanIDValid, .streamDestMacValid, .msrpAccLatValid, .streamIDValid, .streamFormatValid,
   ]
 
+  /// The flags marking the IEEE 1722.1-2021 IP fields.
+  static let ipFieldFlags: StreamInfoFlags = [
+    .ipFlagsValid, .ipSrcPortValid, .ipDstPortValid, .ipSrcAddrValid, .ipDstAddrValid,
+  ]
+
   /// Serializes the SET_STREAM_INFO fields following descriptor_type and descriptor_index,
-  /// in the 1722.1-2013 layout, which every entity accepts. Response-only flags are dropped
-  /// and the MSRP failure fields are zero (IEEE 1722.1-2021 §7.4.15.1); the latency is sent
-  /// only with MSRP_ACC_LAT_VALID, which Milan 1.3 entities reject (Milan 1.3 §5.4.2.9).
+  /// in the 1722.1-2013 layout, which every entity accepts, or with the IP fields when one of
+  /// their flags is set. Response-only flags are dropped and the MSRP failure fields are zero
+  /// (IEEE 1722.1-2021 §7.4.15.1); the latency is sent only with MSRP_ACC_LAT_VALID, which
+  /// Milan 1.3 entities reject (Milan 1.3 §5.4.2.9).
   func serialize(into context: inout SerializationContext) throws {
-    let flags = streamInfoFlags.intersection(Self.commandFlags)
+    let hasIPFields = !streamInfoFlags.isDisjoint(with: Self.ipFieldFlags)
+    let flags = streamInfoFlags.intersection(
+      hasIPFields ? Self.commandFlags.union(Self.ipFieldFlags) : Self.commandFlags
+    )
     context.serialize(uint32: flags.rawValue)
     try context.serialize(streamFormat)
     try context.serialize(streamID)
@@ -1142,7 +1163,18 @@ extension StreamInfo {
     context.serialize(uint8: 0) // reserved
     context.serialize(uint64: 0) // msrp_failure_bridge_id
     context.serialize(uint16: streamVlanID)
-    context.serialize(uint16: 0) // reserved
+    guard hasIPFields else {
+      context.serialize(uint16: 0) // reserved
+      return
+    }
+    guard sourceIPAddress.count == 16, destinationIPAddress.count == 16 else {
+      throw AvdeccCodecError.valueTooLarge
+    }
+    context.serialize(uint16: ipFlags)
+    context.serialize(uint16: sourcePort)
+    context.serialize(uint16: destinationPort)
+    context.serialize(sourceIPAddress)
+    context.serialize(destinationIPAddress)
   }
 }
 

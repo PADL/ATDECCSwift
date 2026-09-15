@@ -135,6 +135,18 @@ struct ProbingAcmpStatus {
 /// than a GET response, which reports state such as CONNECTED and MSRP_ACC_LAT_VALID; Milan
 /// entities reject MSRP_ACC_LAT_VALID, and set a presentation time with SET_MAX_TRANSIT_TIME.
 public struct StreamInfo: Sendable, Hashable, CustomStringConvertible {
+  /// The GET_STREAM_INFO layout a response used. A Milan STREAM_OUTPUT's msrp_accumulated_latency
+  /// is its presentation time offset only in the layout from before Milan 1.3 (Milan 1.3
+  /// §5.4.2.10.2).
+  public enum Layout: Sendable, Hashable {
+    /// 48 octets.
+    case ieee1722_1_2013
+    /// 56 octets, with the Milan extension fields.
+    case milanBefore1_3
+    /// 84 octets, with the IP fields; also Milan 1.3's.
+    case ieee1722_1_2021
+  }
+
   public var streamFormat: StreamFormat
   public var streamID: UniqueIdentifier
   public var msrpAccumulatedLatency: UInt32
@@ -150,6 +162,15 @@ public struct StreamInfo: Sendable, Hashable, CustomStringConvertible {
   public var probingStatusRaw: UInt8?
   /// acmp_status as received, reserved codes included; nil when the entity does not report it.
   public var acmpStatusRaw: UInt8?
+  public var layout: Layout
+  /// The IEEE 1722.1-2021 IP fields, valid per the IP_*_VALID flags (§7.4.15.1). The addresses
+  /// are 16 octets, IPv4 being mapped as in RFC 4291 §2.5.5.2. A SET sends them when any of
+  /// those flags is set.
+  public var ipFlags: UInt16
+  public var sourcePort: UInt16
+  public var destinationPort: UInt16
+  public var sourceIPAddress: [UInt8]
+  public var destinationIPAddress: [UInt8]
 
   /// `probingStatusRaw`, or nil when that is not reported or is a reserved code.
   public var probingStatus: ProbingStatus? {
@@ -173,8 +194,20 @@ public struct StreamInfo: Sendable, Hashable, CustomStringConvertible {
     msrpFailureBridgeID: UInt64 = 0,
     streamInfoFlagsEx: StreamInfoFlagsEx? = nil,
     probingStatusRaw: UInt8? = nil,
-    acmpStatusRaw: UInt8? = nil
+    acmpStatusRaw: UInt8? = nil,
+    layout: Layout = .ieee1722_1_2013,
+    ipFlags: UInt16 = 0,
+    sourcePort: UInt16 = 0,
+    destinationPort: UInt16 = 0,
+    sourceIPAddress: [UInt8] = [UInt8](repeating: 0, count: 16),
+    destinationIPAddress: [UInt8] = [UInt8](repeating: 0, count: 16)
   ) {
+    self.layout = layout
+    self.ipFlags = ipFlags
+    self.sourcePort = sourcePort
+    self.destinationPort = destinationPort
+    self.sourceIPAddress = sourceIPAddress
+    self.destinationIPAddress = destinationIPAddress
     self.streamFormat = streamFormat
     self.streamID = streamID
     self.msrpAccumulatedLatency = msrpAccumulatedLatency
@@ -209,7 +242,13 @@ public struct StreamInfo: Sendable, Hashable, CustomStringConvertible {
       lhs.msrpFailureBridgeID == rhs.msrpFailureBridgeID &&
       lhs.streamInfoFlagsEx == rhs.streamInfoFlagsEx &&
       lhs.probingStatusRaw == rhs.probingStatusRaw &&
-      lhs.acmpStatusRaw == rhs.acmpStatusRaw
+      lhs.acmpStatusRaw == rhs.acmpStatusRaw &&
+      lhs.layout == rhs.layout &&
+      lhs.ipFlags == rhs.ipFlags &&
+      lhs.sourcePort == rhs.sourcePort &&
+      lhs.destinationPort == rhs.destinationPort &&
+      lhs.sourceIPAddress == rhs.sourceIPAddress &&
+      lhs.destinationIPAddress == rhs.destinationIPAddress
   }
 
   public func hash(into hasher: inout Hasher) {
@@ -224,6 +263,12 @@ public struct StreamInfo: Sendable, Hashable, CustomStringConvertible {
     hasher.combine(streamInfoFlagsEx)
     hasher.combine(probingStatusRaw)
     hasher.combine(acmpStatusRaw)
+    hasher.combine(layout)
+    hasher.combine(ipFlags)
+    hasher.combine(sourcePort)
+    hasher.combine(destinationPort)
+    hasher.combine(sourceIPAddress)
+    hasher.combine(destinationIPAddress)
   }
 }
 
