@@ -163,10 +163,12 @@ struct DiscoveryStateMachine: Sendable {
     }
 
     if entity.entityCapabilities != advertised.entityCapabilities ||
-      entity.associationID != advertised.associationID
+      entity.associationID != advertised.associationID ||
+      entity.currentConfigurationIndex != advertised.currentConfigurationIndex
     {
       entity.entityCapabilities = advertised.entityCapabilities
       entity.associationID = advertised.associationID
+      entity.currentConfigurationIndex = advertised.currentConfigurationIndex
       result = .updated
     }
 

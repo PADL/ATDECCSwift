@@ -568,6 +568,9 @@ public struct Entity: Sendable, Hashable, CustomStringConvertible {
   public var controllerCapabilities: ControllerCapabilities
   public var identifyControlIndex: UInt16?
   public var associationID: UniqueIdentifier?
+  /// The current CONFIGURATION, when the entity advertises it (IEEE 1722.1-2021 Table 6-2,
+  /// AEM_CONFIGURATION_INDEX_VALID).
+  public var currentConfigurationIndex: UInt16?
   public var interfacesInformation: [UInt16: InterfaceInformation]
 
   /// Builds an entity with the single interface described by `adpdu`, received from
@@ -586,6 +589,8 @@ public struct Entity: Sendable, Hashable, CustomStringConvertible {
     identifyControlIndex = capabilities.contains(.aemIdentifyControlIndexValid)
       ? adpdu.identifyControlIndex : nil
     associationID = capabilities.contains(.associationIDValid) ? adpdu.associationID : nil
+    currentConfigurationIndex = capabilities.contains(.aemConfigurationIndexValid)
+      ? adpdu.currentConfigurationIndex : nil
 
     let gptpSupported = capabilities.contains(.gptpSupported)
     let interfaceIndex = capabilities.contains(.aemInterfaceIndexValid)

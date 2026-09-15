@@ -97,7 +97,10 @@ private final class FakeEntity: Sendable {
     ))
   }
 
-  func advertise(_ messageType: AdpMessageType = .entityAvailable) async throws {
+  func advertise(
+    _ messageType: AdpMessageType = .entityAvailable,
+    currentConfigurationIndex: UInt16? = nil
+  ) async throws {
     let availableIndex = _availableIndex.withLock { index in
       defer { index += 1 }
       return index
@@ -106,10 +109,12 @@ private final class FakeEntity: Sendable {
       messageType: messageType,
       validTime: 10,
       entityID: entityID,
-      entityCapabilities: .aemSupported,
+      entityCapabilities: currentConfigurationIndex == nil
+        ? .aemSupported : [.aemSupported, .aemConfigurationIndexValid],
       listenerStreamSinks: 1,
       listenerCapabilities: [.implemented, .audioSink],
-      availableIndex: availableIndex
+      availableIndex: availableIndex,
+      currentConfigurationIndex: currentConfigurationIndex ?? 0
     )), to: AvdeccMulticastMacAddress)
   }
 
@@ -391,6 +396,23 @@ final class ControllerTests: XCTestCase {
     XCTAssertNotNil(offline)
     let discovered = await controller.discoveredEntity(id: entityID)
     XCTAssertNil(discovered)
+    await controller.close()
+  }
+
+  // a change of current configuration in an advertisement updates the entity (IEEE 1722.1-2021
+  // Table 6-2, AEM_CONFIGURATION_INDEX_VALID)
+  func testAdvertisedConfigurationChange() async throws {
+    let controller = try await makeController()
+    let initial = await controller.discoveredEntity(id: entityID)
+    XCTAssertNil(initial?.currentConfigurationIndex)
+    let events = await controller.events()
+    try await entity.advertise(currentConfigurationIndex: 1)
+    let updated = await first(events) {
+      if case .entityUpdated(entityID) = $0 { true } else { false }
+    }
+    XCTAssertNotNil(updated)
+    let changed = await controller.discoveredEntity(id: entityID)
+    XCTAssertEqual(changed?.currentConfigurationIndex, 1)
     await controller.close()
   }
 
