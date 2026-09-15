@@ -524,6 +524,7 @@ public struct JackDescriptor: Sendable, Hashable, CustomStringConvertible {
 
 /// AVB_INTERFACE descriptor (IEEE 1722.1-2021 §7.2.8).
 public struct AvbInterfaceDescriptor: Sendable, Hashable, CustomStringConvertible {
+  /// Up to port_number; number_of_controls and base_control follow when present (Table 7-13).
   static let bodyLength = 94
 
   public var objectName: String
@@ -541,6 +542,8 @@ public struct AvbInterfaceDescriptor: Sendable, Hashable, CustomStringConvertibl
   public var logAnnounceInterval: UInt8
   public var logPDelayInterval: UInt8
   public var portNumber: UInt16
+  public var numberOfControls: UInt16
+  public var baseControl: DescriptorIndex
 
   init(parsingBody input: inout ParserSpan) throws {
     try input.requireRemaining(Self.bodyLength)
@@ -559,6 +562,13 @@ public struct AvbInterfaceDescriptor: Sendable, Hashable, CustomStringConvertibl
     logAnnounceInterval = try UInt8(parsing: &input)
     logPDelayInterval = try UInt8(parsing: &input)
     portNumber = try UInt16(parsingBigEndian: &input)
+    if input.count >= 4 {
+      numberOfControls = try UInt16(parsingBigEndian: &input)
+      baseControl = try UInt16(parsingBigEndian: &input)
+    } else {
+      numberOfControls = 0
+      baseControl = 0
+    }
   }
 
   func serializeBody(into context: inout SerializationContext) throws {
@@ -577,6 +587,8 @@ public struct AvbInterfaceDescriptor: Sendable, Hashable, CustomStringConvertibl
     context.serialize(uint8: logAnnounceInterval)
     context.serialize(uint8: logPDelayInterval)
     context.serialize(uint16: portNumber)
+    context.serialize(uint16: numberOfControls)
+    context.serialize(uint16: baseControl)
   }
 
   public var description: String {
@@ -603,7 +615,9 @@ public struct AvbInterfaceDescriptor: Sendable, Hashable, CustomStringConvertibl
       lhs.logSyncInterval == rhs.logSyncInterval &&
       lhs.logAnnounceInterval == rhs.logAnnounceInterval &&
       lhs.logPDelayInterval == rhs.logPDelayInterval &&
-      lhs.portNumber == rhs.portNumber
+      lhs.portNumber == rhs.portNumber &&
+      lhs.numberOfControls == rhs.numberOfControls &&
+      lhs.baseControl == rhs.baseControl
   }
 
   public func hash(into hasher: inout Hasher) {
@@ -622,6 +636,8 @@ public struct AvbInterfaceDescriptor: Sendable, Hashable, CustomStringConvertibl
     hasher.combine(logAnnounceInterval)
     hasher.combine(logPDelayInterval)
     hasher.combine(portNumber)
+    hasher.combine(numberOfControls)
+    hasher.combine(baseControl)
   }
 }
 

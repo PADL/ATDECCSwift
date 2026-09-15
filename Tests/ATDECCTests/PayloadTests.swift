@@ -564,11 +564,19 @@ extension PayloadTests {
     // clock_accuracy, priority2, domain_number, log_sync_interval, log_announce_interval,
     // log_pdelay_interval, port_number
     body += [0x21, 0xF7, 0x00, 0xFD, 0x00, 0x00] + be16(1)
+    // an IEEE 1722.1-2013 descriptor ends at port_number
+    guard case let (_, _, .avbInterface(shortDescriptor)) =
+      try readDescriptorResponse(be16(DescriptorType.avbInterface.rawValue) + be16(0) + body)
+    else { return XCTFail("expected AVB_INTERFACE") }
+    XCTAssertEqual(shortDescriptor.numberOfControls, 0)
+    body += be16(2) + be16(3) // number_of_controls, base_control
     let bytes = be16(DescriptorType.avbInterface.rawValue) + be16(0) + body
     guard case let (_, _, .avbInterface(descriptor)) = try readDescriptorResponse(bytes) else {
       return XCTFail("expected AVB_INTERFACE")
     }
     XCTAssertEqual(UInt64(eui48: descriptor.macAddress), 0x001B_9200_0001)
+    XCTAssertEqual(descriptor.numberOfControls, 2)
+    XCTAssertEqual(descriptor.baseControl, 3)
     var context = SerializationContext()
     try Descriptor.avbInterface(descriptor).serialize(descriptorIndex: 0, into: &context)
     XCTAssertEqual(context.bytes, bytes)
@@ -589,6 +597,8 @@ extension PayloadTests {
       ("logAnnounceInterval", { $0.logAnnounceInterval = 1 }),
       ("logPDelayInterval", { $0.logPDelayInterval = 1 }),
       ("portNumber", { $0.portNumber = 0 }),
+      ("numberOfControls", { $0.numberOfControls = 0 }),
+      ("baseControl", { $0.baseControl = 0 }),
     ]
     assertEveryFieldIsCompared(descriptor, mutations)
   }
