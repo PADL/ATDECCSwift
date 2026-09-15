@@ -73,6 +73,13 @@ private let _controllerAcmpResponses: Set<AcmpMessageType> = [
   .connectRxResponse, .disconnectRxResponse, .getRxStateResponse, .getTxConnectionResponse,
 ]
 
+/// The fixed-size GET commands GET_DYNAMIC_INFO can carry (IEEE 1722.1-2021 §7.4.76.2).
+private let _dynamicInfoCommandTypes: Set<AemCommandType> = [
+  .getConfiguration, .getStreamFormat, .getVideoFormat, .getSensorFormat, .getStreamInfo, .getName,
+  .getAssociationID, .getSamplingRate, .getClockSource, .getSignalSelector, .getCounters,
+  .getMemoryObjectLength, .getStreamBackup,
+]
+
 // name_index values (IEEE 1722.1-2021 §7.4.17.1): the ENTITY descriptor's entity_name and
 // group_name, and every other descriptor's object_name.
 private let _entityNameIndex: UInt16 = 0
@@ -1142,7 +1149,7 @@ public actor Controller<Port: NetworkPort> {
     case let .reboot(descriptorType, descriptorIndex):
       _yield(.entityRebooting(id, descriptorType: descriptorType.rawValue, descriptorIndex: descriptorIndex))
     case .entityAvailable, .controllerAvailable, .readDescriptor, .registerUnsolicitedNotification,
-         .startOperation, .abortOperation, .other:
+         .startOperation, .abortOperation, .getDynamicInfo, .other:
       break
     }
   }
@@ -2189,6 +2196,20 @@ public extension Controller {
       descriptorType: .control, descriptorIndex: controlIndex, valueIndices: valueIndices
     )) else { throw AemStatus.protocolError }
     return packedControlValues
+  }
+
+  /// GET_DYNAMIC_INFO (IEEE 1722.1-2021 §7.4.76): answers fixed-size GET `commands` in one
+  /// response, each with its own status. The entity leaves out responses that would overflow the
+  /// AECPDU, so keep the commands' responses within 524 octets.
+  func getDynamicInfo(
+    id targetEntityID: UniqueIdentifier, commands: [AemCommandPayload]
+  ) async throws -> [DynamicInfo] {
+    guard commands.allSatisfy({ _dynamicInfoCommandTypes.contains($0.commandType) }) else {
+      throw AemStatus.badArguments
+    }
+    guard case let .getDynamicInfo(infos) = try await _aem(targetEntityID, .getDynamicInfo(commands: commands))
+    else { throw AemStatus.protocolError }
+    return infos
   }
 
   // MARK: Audio maps

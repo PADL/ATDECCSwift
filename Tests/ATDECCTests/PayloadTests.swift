@@ -294,6 +294,44 @@ final class PayloadTests: XCTestCase {
     )
   }
 
+  // dynamic_info: length, reserved, status, reserved, command_type, data (Figure 7-94)
+  func testGetDynamicInfoPayloads() throws {
+    let command = AemCommandPayload.getDynamicInfo(commands: [
+      .getConfiguration,
+      .getSamplingRate(descriptorType: .audioUnit, descriptorIndex: 0),
+    ])
+    let commandBytes = try command.serialized()
+    XCTAssertEqual(
+      commandBytes,
+      be16(0) + be16(0) + [0, 0] + be16(AemCommandType.getConfiguration.rawValue) +
+        be16(4) + be16(0) + [0, 0] + be16(AemCommandType.getSamplingRate.rawValue) +
+        be16(DescriptorType.audioUnit.rawValue) + be16(0)
+    )
+    XCTAssertEqual(try AemCommandPayload(commandTypeRaw: command.commandTypeRaw, data: commandBytes), command)
+
+    let samplingRate = be16(DescriptorType.audioUnit.rawValue) + be16(0) + be32(48000)
+    let responseBytes = be16(8) + be16(0) + [UInt8(AemStatus.success.rawValue), 0] +
+      be16(AemCommandType.getSamplingRate.rawValue) + samplingRate +
+      be16(4) + be16(0) + [UInt8(AemStatus.notSupported.rawValue), 0] +
+      be16(AemCommandType.getStreamBackup.rawValue) + be16(DescriptorType.streamInput.rawValue) + be16(0)
+    guard case let .getDynamicInfo(infos) =
+      try AemResponsePayload(commandTypeRaw: command.commandTypeRaw, data: responseBytes)
+    else { return XCTFail("expected GET_DYNAMIC_INFO") }
+    XCTAssertEqual(infos.count, 2)
+    guard case let .getSamplingRate(_, _, rate)? = infos.first?.response else {
+      return XCTFail("expected a GET_SAMPLING_RATE response")
+    }
+    XCTAssertEqual(rate.rawValue, 48000)
+    XCTAssertEqual(infos.last?.status, .notSupported)
+    XCTAssertNil(infos.last?.response)
+
+    // a length running past the payload is malformed
+    XCTAssertThrowsError(try AemResponsePayload(
+      commandTypeRaw: command.commandTypeRaw,
+      data: be16(9) + be16(0) + [0, 0] + be16(AemCommandType.getSamplingRate.rawValue)
+    ))
+  }
+
   func testMemoryObjectLengthFieldOrder() throws {
     let command = AemCommandPayload.setMemoryObjectLength(
       configurationIndex: 1,

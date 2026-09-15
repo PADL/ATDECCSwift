@@ -662,6 +662,22 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  // GET_DYNAMIC_INFO carries only fixed-size GET commands (§7.4.76.2)
+  func testDynamicInfoRefusesVariableSizeCommands() async throws {
+    let controller = try await makeController()
+    do {
+      _ = try await controller.getDynamicInfo(
+        id: entityID,
+        commands: [.getControl(descriptorType: .control, descriptorIndex: 0)]
+      )
+      XCTFail("expected badArguments")
+    } catch let status as AemStatus {
+      XCTAssertEqual(status, .badArguments)
+    }
+    XCTAssertEqual(entity.receivedCount(where: isCommand(.getDynamicInfo)), 0)
+    await controller.close()
+  }
+
   func testUnsolicitedRebootIsReported() async throws {
     let controller = try await makeController()
     let events = await controller.events()

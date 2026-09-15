@@ -141,6 +141,8 @@ public enum AemCommandPayload: Sendable, Hashable {
     maxTransitTime: UInt64
   )
   case getMaxTransitTime(descriptorType: DescriptorType, descriptorIndex: DescriptorIndex)
+  /// Fixed-size GET commands answered together (IEEE 1722.1-2021 §7.4.76).
+  case getDynamicInfo(commands: [AemCommandPayload])
   /// A command without a dedicated model.
   case other(commandType: UInt16, data: [UInt8])
 
@@ -188,6 +190,7 @@ public enum AemCommandPayload: Sendable, Hashable {
     case .getMemoryObjectLength: AemCommandType.getMemoryObjectLength.rawValue
     case .setMaxTransitTime: AemCommandType.setMaxTransitTime.rawValue
     case .getMaxTransitTime: AemCommandType.getMaxTransitTime.rawValue
+    case .getDynamicInfo: AemCommandType.getDynamicInfo.rawValue
     case let .other(commandType, _): commandType
     }
   }
@@ -310,6 +313,17 @@ public enum AemCommandPayload: Sendable, Hashable {
       try context.serialize(descriptorType)
       context.serialize(uint16: descriptorIndex)
       context.serialize(uint64: maxTransitTime)
+    case let .getDynamicInfo(commands):
+      for command in commands {
+        let data = try command.serialized()
+        guard data.count <= Int(UInt16.max) else { throw AvdeccCodecError.valueTooLarge }
+        context.serialize(uint16: UInt16(data.count)) // info_command_specific_data_length
+        context.serialize(uint16: 0) // reserved
+        context.serialize(uint8: 0) // info_status: SUCCESS in a command
+        context.serialize(uint8: 0) // reserved
+        context.serialize(uint16: command.commandTypeRaw)
+        context.serialize(data)
+      }
     case let .other(_, data):
       context.serialize(data)
     }
@@ -505,6 +519,10 @@ public enum AemCommandPayload: Sendable, Hashable {
       case .getMaxTransitTime:
         let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
         return .getMaxTransitTime(descriptorType: descriptorType, descriptorIndex: descriptorIndex)
+      case .getDynamicInfo:
+        return try .getDynamicInfo(commands: _parseDynamicInfos(&input).map {
+          try AemCommandPayload(commandTypeRaw: $0.commandTypeRaw, data: $0.data)
+        })
       default:
         return .other(commandType: commandTypeRaw, data: [UInt8](parsingRemainingBytes: &input))
       }
@@ -675,6 +693,7 @@ public enum AemResponsePayload: Sendable, Hashable {
     descriptorIndex: DescriptorIndex,
     maxTransitTime: UInt64
   )
+  case getDynamicInfo([DynamicInfo])
   /// A response without a dedicated model.
   case other(commandType: UInt16, data: [UInt8])
 
@@ -941,6 +960,10 @@ public enum AemResponsePayload: Sendable, Hashable {
           descriptorIndex: UInt16(parsingBigEndian: &input),
           maxTransitTime: UInt64(parsingBigEndian: &input)
         )
+      case .getDynamicInfo:
+        return try .getDynamicInfo(_parseDynamicInfos(&input).map {
+          DynamicInfo(commandTypeRaw: $0.commandTypeRaw, statusRaw: $0.statusRaw, data: $0.data)
+        })
       default:
         return .other(commandType: commandTypeRaw, data: [UInt8](parsingRemainingBytes: &input))
       }
@@ -980,6 +1003,54 @@ private func _serializeAudioMappings(
   for mapping in mappings {
     try context.serialize(mapping)
   }
+}
+
+/// One element of a GET_DYNAMIC_INFO response's dynamic_infos (IEEE 1722.1-2021 §7.4.76.1). An
+/// entity leaves out a response that would overflow the AECPDU, so match elements to commands by
+/// their contents rather than position.
+public struct DynamicInfo: Sendable, Hashable {
+  public let commandTypeRaw: UInt16
+  public let statusRaw: UInt8
+  /// The embedded response's command_specific_data.
+  public let data: [UInt8]
+
+  public init(commandTypeRaw: UInt16, statusRaw: UInt8, data: [UInt8]) {
+    self.commandTypeRaw = commandTypeRaw
+    self.statusRaw = statusRaw
+    self.data = data
+  }
+
+  public var commandType: AemCommandType {
+    AemCommandType(rawValue: commandTypeRaw) ?? .invalidCommandType
+  }
+
+  public var status: AemStatus {
+    AemStatus(UInt16(statusRaw))
+  }
+
+  /// The embedded response, when it succeeded and decodes.
+  public var response: AemResponsePayload? {
+    guard status == .success else { return nil }
+    return try? AemResponsePayload(commandTypeRaw: commandTypeRaw, data: data)
+  }
+}
+
+// dynamic_info: info_command_specific_data_length, reserved, info_status, reserved,
+// info_command_type and info_command_specific_data (IEEE 1722.1-2021 Figure 7-94), to the end of
+// the payload.
+private func _parseDynamicInfos(
+  _ input: inout ParserSpan
+) throws -> [(commandTypeRaw: UInt16, statusRaw: UInt8, data: [UInt8])] {
+  var infos = [(commandTypeRaw: UInt16, statusRaw: UInt8, data: [UInt8])]()
+  while input.count > 0 {
+    let length = try UInt16(parsingBigEndian: &input)
+    _ = try UInt16(parsingBigEndian: &input) // reserved
+    let statusRaw = try UInt8(parsing: &input)
+    _ = try UInt8(parsing: &input) // reserved
+    let commandTypeRaw = try UInt16(parsingBigEndian: &input)
+    infos.append((commandTypeRaw, statusRaw, try [UInt8](parsing: &input, byteCount: Int(length))))
+  }
+  return infos
 }
 
 // INCREMENT/DECREMENT_CONTROL: descriptor, index_count, reserved and index_count value indices
