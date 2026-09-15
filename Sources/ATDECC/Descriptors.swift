@@ -375,7 +375,7 @@ public struct AudioUnitDescriptor: Sendable, Hashable, CustomStringConvertible {
 /// redundancy extension when present.
 public struct StreamDescriptor: Sendable, Hashable, CustomStringConvertible {
   static let bodyLength = 128
-  // redundant_offset and number_of_redundant_streams (Milan 1.3 §5.3.3.4)
+  // redundant_offset and number_of_redundant_streams (Milan 1.3 Annex C, Table C.1)
   static let redundancyFieldsLength = 4
 
   public var objectName: String

@@ -172,7 +172,7 @@ public struct StreamInfoFlags: OptionSet, Sendable, Hashable {
   public static let supportsEncrypted = StreamInfoFlags(rawValue: 1 << 4)
   public static let encryptedPdu = StreamInfoFlags(rawValue: 1 << 5)
   public static let talkerFailed = StreamInfoFlags(rawValue: 1 << 6)
-  /// Milan 1.3 name for bit 6.
+  /// Bit 6, which Milan 1.3 names SRP_REGISTRATION_FAILED in GET_STREAM_INFO (Tables 5.8 and 5.9).
   public static let registeringFailed = StreamInfoFlags(rawValue: 1 << 6)
   public static let noSrp = StreamInfoFlags(rawValue: 1 << 8)
   public static let ipFlagsValid = StreamInfoFlags(rawValue: 1 << 19)
@@ -192,7 +192,8 @@ public struct StreamInfoFlags: OptionSet, Sendable, Hashable {
   public static let streamFormatValid = StreamInfoFlags(rawValue: 1 << 31)
 }
 
-/// Milan extended GET_STREAM_INFO flags (Milan 1.3 §5.4.2.9).
+/// Milan's GET_STREAM_INFO extension flags, reported before Milan 1.3; a Milan 1.3 GET_STREAM_INFO
+/// has the IEEE 1722.1-2021 layout (§5.4.2.10) and probing moved to GET_STREAM_INPUT_INFO_EX.
 public struct StreamInfoFlagsEx: OptionSet, Sendable, Hashable {
   public let rawValue: UInt32
   public init(rawValue: UInt32) { self.rawValue = rawValue }
@@ -340,7 +341,7 @@ public struct MilanInfoFeaturesFlags: OptionSet, Sendable, Hashable {
 
   public static let redundancy = MilanInfoFeaturesFlags(rawValue: 1 << 0)
   public static let talkerDynamicMappingsWhileRunning = MilanInfoFeaturesFlags(rawValue: 1 << 1)
-  /// BIND_STREAM / UNBIND_STREAM / GET_STREAM_INPUT_INFO_EX are supported (Milan 1.3).
+  /// BIND_STREAM and UNBIND_STREAM are supported (Milan 1.3 Table 5.17).
   public static let mvuBinding = MilanInfoFeaturesFlags(rawValue: 1 << 2)
   public static let talkerSignalPresence = MilanInfoFeaturesFlags(rawValue: 1 << 3)
 }
@@ -350,7 +351,7 @@ public struct BindStreamFlags: OptionSet, Sendable, Hashable {
   public let rawValue: UInt16
   public init(rawValue: UInt16) { self.rawValue = rawValue }
 
-  /// Talker holds off streaming until told otherwise via control protocol.
+  /// Binds the listener's STREAM_INPUT in the stopped state (Milan 1.3 Table 5.19).
   public static let streamingWait = BindStreamFlags(rawValue: 1 << 0)
 }
 

@@ -21,8 +21,8 @@ import IEEE802
 // response carries the same fields as its command unless noted; a GET_* command carries only
 // the fields that address what is being read.
 
-// GET_STREAM_INFO response lengths: IEEE 1722.1-2013, Milan (with the extension fields) and
-// IEEE 1722.1-2021 (with the IP fields).
+// GET_STREAM_INFO response lengths: IEEE 1722.1-2013, Milan before 1.3 (with the extension
+// fields) and IEEE 1722.1-2021 and Milan 1.3 (with the IP fields).
 private let _streamInfoLength = 48
 private let _milanStreamInfoLength = 56
 private let _ieee2021StreamInfoLength = 84
@@ -933,8 +933,8 @@ private func _serializeAudioMappings(
   }
 }
 
-// SET/GET_MEMORY_OBJECT_LENGTH put memory_object_index before configuration_index on the wire,
-// as la_avdecc (and the devices it interoperates with) do.
+// SET/GET_MEMORY_OBJECT_LENGTH put the memory object's descriptor_index before
+// configuration_index (IEEE 1722.1-2021 Figure 7-90), as la_avdecc does.
 private func _parseMemoryObjectIndices(_ input: inout ParserSpan) throws -> (UInt16, UInt16) {
   let memoryObjectIndex = try UInt16(parsingBigEndian: &input)
   let configurationIndex = try UInt16(parsingBigEndian: &input)

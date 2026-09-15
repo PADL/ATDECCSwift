@@ -96,7 +96,7 @@ public enum AcmpStatus: UInt16, Error {
   }
 }
 
-/// Milan AECP-MVU status code (Milan 1.3 §5.3.5). Codes 0..10 overlap with AEM; the
+/// Milan AECP-MVU status code (Milan 1.3 §5.4.3.3, Table 5.16). Codes 0..10 overlap with AEM; the
 /// library-local codes (99x) match across all three status enums.
 public enum MvuStatus: UInt16, Error {
   case success = 0

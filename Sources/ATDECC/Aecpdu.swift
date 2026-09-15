@@ -119,7 +119,7 @@ public enum AemCommandType: UInt16, Sendable, CaseIterable {
   case invalidCommandType = 0xFFFF
 }
 
-/// Milan Vendor Unique command_type (Milan 1.3 §5.4.4).
+/// Milan Vendor Unique command_type (Milan 1.3 §5.4.3.2.3, Table 5.15).
 public enum MvuCommandType: UInt16, Sendable, CaseIterable {
   case getMilanInfo = 0x0000
   case setSystemUniqueID = 0x0001
@@ -136,7 +136,7 @@ public enum MvuCommandType: UInt16, Sendable, CaseIterable {
 public let IdentifyNotificationControllerEntityID = UniqueIdentifier(0x90E0_F0FF_FE01_0001)
 
 /// protocol_id of Milan Vendor Unique AECPDUs: Avnu OUI-36 00-1B-C5-0A-C plus 0x100
-/// (Milan 1.3 §5.4.3.1).
+/// (Milan 1.3 §5.4.3.2.1).
 public let MvuProtocolIdentifier: UInt64 = 0x001B_C50A_C100
 
 /// The largest control_data_length of an AECPDU (IEEE 1722.1-2021 §9.2.2.6).

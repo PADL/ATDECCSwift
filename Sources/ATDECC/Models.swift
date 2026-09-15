@@ -107,8 +107,8 @@ public enum ProbingStatus: UInt8, Sendable {
   case completed = 3
 }
 
-/// The octet holding a 3-bit probing_status and a 5-bit acmp_status, in GET_STREAM_INFO
-/// (Milan 1.3 §5.4.2.9) and GET_STREAM_INPUT_INFO_EX (Milan 1.3 §5.4.4.8) responses. The
+/// The octet holding a 3-bit probing_status and a 5-bit acmp_status, in GET_STREAM_INFO responses
+/// from before Milan 1.3 and GET_STREAM_INPUT_INFO_EX (Milan 1.3 §5.4.4.8) responses. The
 /// codes are kept as received, since either may be reserved.
 struct ProbingAcmpStatus {
   static let probingStatusShift = 5
@@ -354,7 +354,7 @@ public struct DescriptorCounters: Sendable, Hashable {
 
 // MARK: - Clocks
 
-/// CLOCK_SOURCE descriptor clock_source_type (IEEE 1722.1-2021 Table 7-11).
+/// CLOCK_SOURCE descriptor clock_source_type (IEEE 1722.1-2021 Table 7-17).
 public enum ClockSourceType: UInt16, Sendable {
   case `internal` = 0
   case external = 1
@@ -364,7 +364,7 @@ public enum ClockSourceType: UInt16, Sendable {
 
 // MARK: - Operations
 
-/// Operation type for START_OPERATION on a MEMORY_OBJECT (IEEE 1722.1-2021 Table 7-10).
+/// Operation type for START_OPERATION on a MEMORY_OBJECT (IEEE 1722.1-2021 Table 7-20).
 public enum MemoryObjectOperationType: UInt16, Sendable {
   case store = 0x0000
   case storeAndReboot = 0x0001
@@ -443,12 +443,13 @@ public struct MilanInfo: Sendable, Hashable {
   }
 }
 
-/// Media clock reference priority (Milan 1.3 §5.4.4.4).
+/// Media clock reference priority, from 0 to 255 (Milan 1.3 §7.6.1.2).
 public typealias MediaClockReferencePriority = UInt8
 
-/// Default media clock reference priorities by device category (Milan 1.3 §5.4.4.4). An
-/// entity may report any `MediaClockReferencePriority`, so responses carry the raw value.
+/// Default media clock reference priorities by device category (Milan 1.3 §7.6.1.1, Table 7.3).
+/// An entity may report any `MediaClockReferencePriority`, so responses carry the raw value.
 public enum DefaultMediaClockReferencePriority: MediaClockReferencePriority, Sendable {
+  /// The top of the range (§7.6.1.2), not a Table 7.3 category.
   case highest = 255
   case dedicatedGenerators = 240
   case matrixMixingDevices = 224
@@ -463,6 +464,7 @@ public enum DefaultMediaClockReferencePriority: MediaClockReferencePriority, Sen
   case wirelessReceivers = 80
   case microphones = 64
   case instruments = 48
+  /// The bottom of the range (§7.6.1.2), not a Table 7.3 category.
   case lowest = 0
 }
 
