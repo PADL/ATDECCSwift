@@ -789,7 +789,15 @@ public actor Controller<Port: NetworkPort> {
         return
       }
       guard aem.controllerEntityID == entityID else { return }
-      if aem.unsolicited {
+      if aem.unsolicited, aem.controllerRequest {
+        // a request to change the entity, not a change it has made (§9.3.2.2)
+        if aem.status == AemStatus.success.rawValue,
+           let command = try? AemResponsePayload(commandTypeRaw: aem.commandTypeRaw, data: aem.commandSpecificData)
+        {
+          _yield(.controllerRequest(aem.targetEntityID, command: command))
+        }
+        _yield(.aemAecpUnsolicitedReceived(aem.targetEntityID, sequenceID: aem.sequenceID))
+      } else if aem.unsolicited {
         _handleUnsolicitedResponse(aem)
         _yield(.aemAecpUnsolicitedReceived(aem.targetEntityID, sequenceID: aem.sequenceID))
       } else {

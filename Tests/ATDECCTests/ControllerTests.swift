@@ -130,15 +130,21 @@ private final class FakeEntity: Sendable {
     }
   }
 
-  func sendUnsolicited(_ commandType: AemCommandType, data: [UInt8]) async throws {
-    try await send(.aecp(.aem(AemAecpdu(
+  func sendUnsolicited(
+    _ commandType: AemCommandType,
+    data: [UInt8],
+    controllerRequest: Bool = false
+  ) async throws {
+    var aem = AemAecpdu(
       isResponse: true,
       targetEntityID: entityID,
       controllerEntityID: controllerEntityID,
       unsolicited: true,
       commandType: commandType,
       commandSpecificData: data
-    ))), to: controllerMacAddress)
+    )
+    aem.controllerRequest = controllerRequest
+    try await send(.aecp(.aem(aem)), to: controllerMacAddress)
   }
 
   /// Returns the first PDU received that matches `predicate`, waiting up to `timeout`.
@@ -539,6 +545,27 @@ final class ControllerTests: XCTestCase {
       }
     }
     XCTAssertNotNil(changed)
+    await controller.close()
+  }
+
+  // a front-panel SET_SAMPLING_RATE sent with cr set is a request, not a change (§9.3.2.2)
+  func testControllerRequestIsNotReportedAsAChange() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    let changedEvents = await controller.events()
+    try await entity.sendUnsolicited(
+      .setSamplingRate,
+      data: be16(DescriptorType.audioUnit.rawValue) + be16(0) + be32(96000),
+      controllerRequest: true
+    )
+    let request = await first(events) {
+      if case .controllerRequest(entityID, command: .setSamplingRate(.audioUnit, 0, _)) = $0 { true } else { false }
+    }
+    XCTAssertNotNil(request)
+    let changed = await first(changedEvents, timeout: .milliseconds(200)) {
+      if case .audioUnitSamplingRateChanged = $0 { true } else { false }
+    }
+    XCTAssertNil(changed)
     await controller.close()
   }
 

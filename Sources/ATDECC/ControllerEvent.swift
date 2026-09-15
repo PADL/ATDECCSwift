@@ -100,6 +100,10 @@ public enum ControllerEvent: Sendable {
   case unbindStream(UniqueIdentifier, streamIndex: UInt16)
   case streamInputInfoExChanged(UniqueIdentifier, streamIndex: UInt16, info: StreamInputInfoEx)
 
+  /// An unsolicited response with cr set: the entity asks the controller to execute `command`,
+  /// which has not been applied (IEEE 1722.1-2021 §9.3.2.2).
+  case controllerRequest(UniqueIdentifier, command: AemResponsePayload)
+
   case aecpRetry(UniqueIdentifier)
   case aecpTimeout(UniqueIdentifier)
   case aecpUnexpectedResponse(UniqueIdentifier)
@@ -163,6 +167,8 @@ public extension ControllerEvent {
          let .mediaClockReferenceInfoChanged(id, _, _, _):
       id
     case let .bindStream(id, _, _, _), let .unbindStream(id, _), let .streamInputInfoExChanged(id, _, _):
+      id
+    case let .controllerRequest(id, _):
       id
     case let .aecpRetry(id), let .aecpTimeout(id), let .aecpUnexpectedResponse(id),
          let .aecpResponseTime(id, _), let .aemAecpUnsolicitedReceived(id, _),
