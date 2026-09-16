@@ -1470,14 +1470,14 @@ public enum AemResponsePayload: Sendable, Hashable {
           : .getSignalSelector(descriptorType: descriptorType, descriptorIndex: descriptorIndex, source: source)
       case .setMixer, .getMixer:
         let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
-        let values = try [UInt8](parsingRemainingBytes: &input)
+        let values = [UInt8](parsingRemainingBytes: &input)
         return commandTypeRaw == AemCommandType.setMixer.rawValue
           ? .setMixer(descriptorType: descriptorType, descriptorIndex: descriptorIndex, values: values)
           : .getMixer(descriptorType: descriptorType, descriptorIndex: descriptorIndex, values: values)
       case .setMatrix, .getMatrix:
         let (descriptorType, descriptorIndex) = try _parseDescriptor(&input)
         let subregion = try MatrixSubregion(parsing: &input, repeats: commandTypeRaw == AemCommandType.setMatrix.rawValue ? nil : false)
-        let values = try [UInt8](parsingRemainingBytes: &input)
+        let values = [UInt8](parsingRemainingBytes: &input)
         return commandTypeRaw == AemCommandType.setMatrix.rawValue
           ? .setMatrix(descriptorType: descriptorType, descriptorIndex: descriptorIndex, subregion: subregion, values: values)
           : .getMatrix(descriptorType: descriptorType, descriptorIndex: descriptorIndex, subregion: subregion, values: values)
