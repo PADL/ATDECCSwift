@@ -414,7 +414,7 @@ public struct ConfigurationDescriptor: Sendable, Hashable, CustomStringConvertib
   func serializeBody(into context: inout SerializationContext) throws {
     context.serialize(avdeccFixedString: objectName)
     try context.serialize(localizedDescription)
-    context.serialize(uint16: UInt16(descriptorCounts.count))
+    try context.serialize(count: descriptorCounts.count)
     context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
     for (descriptorType, count) in descriptorCounts.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
       try context.serialize(descriptorType)
@@ -568,7 +568,7 @@ public struct AudioUnitDescriptor: Sendable, Hashable, CustomStringConvertible {
     }
     try context.serialize(currentSamplingRate)
     context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
-    context.serialize(uint16: UInt16(samplingRates.count))
+    try context.serialize(count: samplingRates.count)
     for rate in samplingRates {
       try context.serialize(rate)
     }
@@ -677,7 +677,7 @@ public struct StreamDescriptor: Sendable, Hashable, CustomStringConvertible {
     context.serialize(uint16: streamFlags.rawValue)
     try context.serialize(currentFormat)
     context.serialize(uint16: UInt16(formatsOffset))
-    context.serialize(uint16: UInt16(formats.count))
+    try context.serialize(count: formats.count)
     try context.serialize(backupTalkerEntityID0)
     context.serialize(uint16: backupTalkerUniqueID0)
     try context.serialize(backupTalkerEntityID1)
@@ -689,8 +689,8 @@ public struct StreamDescriptor: Sendable, Hashable, CustomStringConvertible {
     context.serialize(uint16: avbInterfaceIndex)
     context.serialize(uint32: bufferLength)
     if hasRedundancyFields {
-      context.serialize(uint16: UInt16(formatsOffset + formats.count * 8))
-      context.serialize(uint16: UInt16(redundantStreams.count))
+      try context.serialize(count: formatsOffset + formats.count * 8)
+      try context.serialize(count: redundantStreams.count)
     }
     if let timing {
       context.serialize(uint16: timing)
@@ -1224,7 +1224,7 @@ public struct AudioMapDescriptor: Sendable, Hashable, CustomStringConvertible {
 
   func serializeBody(into context: inout SerializationContext) throws {
     context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
-    context.serialize(uint16: UInt16(mappings.count))
+    try context.serialize(count: mappings.count)
     for mapping in mappings {
       try context.serialize(mapping)
     }
@@ -1324,7 +1324,7 @@ public struct ClockDomainDescriptor: Sendable, Hashable, CustomStringConvertible
     try context.serialize(localizedDescription)
     context.serialize(uint16: clockSourceIndex)
     context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
-    context.serialize(uint16: UInt16(clockSources.count))
+    try context.serialize(count: clockSources.count)
     for source in clockSources {
       context.serialize(uint16: source)
     }
@@ -1365,7 +1365,7 @@ public struct TimingDescriptor: Sendable, Hashable, CustomStringConvertible {
     try context.serialize(localizedDescription)
     context.serialize(uint16: algorithm.rawValue)
     context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
-    context.serialize(uint16: UInt16(ptpInstances.count))
+    try context.serialize(count: ptpInstances.count)
     for instance in ptpInstances {
       context.serialize(uint16: instance)
     }
@@ -1847,9 +1847,10 @@ public struct VideoClusterDescriptor: Sendable, Hashable, CustomStringConvertibl
     var offset = _descriptorHeaderLength + Self.bodyLength +
       (currentSamplingRateRange == nil ? 0 : Self.samplingRateRangeFieldsLength)
     // each array follows the previous one
-    func arrayOffset(_ count: Int, _ length: Int) -> UInt16 {
+    func arrayOffset(_ count: Int, _ length: Int) throws -> UInt16 {
       defer { offset += count * length }
-      return UInt16(offset)
+      guard let offset = UInt16(exactly: offset) else { throw AvdeccCodecError.valueTooLarge }
+      return offset
     }
     context.serialize(avdeccFixedString: objectName)
     try context.serialize(localizedDescription)
@@ -1860,24 +1861,24 @@ public struct VideoClusterDescriptor: Sendable, Hashable, CustomStringConvertibl
     context.serialize(uint32: blockLatency)
     context.serialize(uint8: format)
     context.serialize(uint32: currentFormatSpecific)
-    context.serialize(uint16: arrayOffset(supportedFormatSpecifics.count, 4))
-    context.serialize(uint16: UInt16(supportedFormatSpecifics.count))
+    try context.serialize(uint16: arrayOffset(supportedFormatSpecifics.count, 4))
+    try context.serialize(count: supportedFormatSpecifics.count)
     try context.serialize(currentSamplingRate)
-    context.serialize(uint16: arrayOffset(supportedSamplingRates.count, 4))
-    context.serialize(uint16: UInt16(supportedSamplingRates.count))
+    try context.serialize(uint16: arrayOffset(supportedSamplingRates.count, 4))
+    try context.serialize(count: supportedSamplingRates.count)
     context.serialize(uint16: currentAspectRatio)
-    context.serialize(uint16: arrayOffset(supportedAspectRatios.count, 2))
-    context.serialize(uint16: UInt16(supportedAspectRatios.count))
+    try context.serialize(uint16: arrayOffset(supportedAspectRatios.count, 2))
+    try context.serialize(count: supportedAspectRatios.count)
     context.serialize(uint32: currentSize)
-    context.serialize(uint16: arrayOffset(supportedSizes.count, 4))
-    context.serialize(uint16: UInt16(supportedSizes.count))
+    try context.serialize(uint16: arrayOffset(supportedSizes.count, 4))
+    try context.serialize(count: supportedSizes.count)
     context.serialize(uint16: currentColorSpace)
-    context.serialize(uint16: arrayOffset(supportedColorSpaces.count, 2))
-    context.serialize(uint16: UInt16(supportedColorSpaces.count))
+    try context.serialize(uint16: arrayOffset(supportedColorSpaces.count, 2))
+    try context.serialize(count: supportedColorSpaces.count)
     if let currentSamplingRateRange {
       context.serialize(uint64: currentSamplingRateRange)
-      context.serialize(uint16: arrayOffset(supportedSamplingRateRanges.count, 8))
-      context.serialize(uint16: UInt16(supportedSamplingRateRanges.count))
+      try context.serialize(uint16: arrayOffset(supportedSamplingRateRanges.count, 8))
+      try context.serialize(count: supportedSamplingRateRanges.count)
     }
     for value in supportedFormatSpecifics {
       context.serialize(uint32: value)
@@ -1956,10 +1957,10 @@ public struct SensorClusterDescriptor: Sendable, Hashable, CustomStringConvertib
     context.serialize(uint32: blockLatency)
     context.serialize(uint64: currentFormat)
     context.serialize(uint16: UInt16(formatsOffset))
-    context.serialize(uint16: UInt16(supportedFormats.count))
+    try context.serialize(count: supportedFormats.count)
     try context.serialize(currentSamplingRate)
-    context.serialize(uint16: UInt16(formatsOffset + supportedFormats.count * 8))
-    context.serialize(uint16: UInt16(supportedSamplingRates.count))
+    try context.serialize(count: formatsOffset + supportedFormats.count * 8)
+    try context.serialize(count: supportedSamplingRates.count)
     for format in supportedFormats {
       context.serialize(uint64: format)
     }
@@ -2021,7 +2022,7 @@ public struct VideoMapDescriptor: Sendable, Hashable, CustomStringConvertible {
 
   func serializeBody(into context: inout SerializationContext) throws {
     context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
-    context.serialize(uint16: UInt16(mappings.count))
+    try context.serialize(count: mappings.count)
     for mapping in mappings {
       mapping.serialize(into: &context)
     }
@@ -2074,7 +2075,7 @@ public struct SensorMapDescriptor: Sendable, Hashable, CustomStringConvertible {
 
   func serializeBody(into context: inout SerializationContext) throws {
     context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
-    context.serialize(uint16: UInt16(mappings.count))
+    try context.serialize(count: mappings.count)
     for mapping in mappings {
       mapping.serialize(into: &context)
     }
@@ -2119,7 +2120,7 @@ public struct SignalSelectorDescriptor: Sendable, Hashable, CustomStringConverti
     context.serialize(uint32: controlLatency)
     context.serialize(uint16: controlDomain)
     context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
-    context.serialize(uint16: UInt16(sources.count))
+    try context.serialize(count: sources.count)
     try currentSource.serialize(into: &context)
     try defaultSource.serialize(into: &context)
     for source in sources {
@@ -2172,8 +2173,8 @@ public struct MixerDescriptor: Sendable, Hashable, CustomStringConvertible {
     context.serialize(uint16: controlDomain)
     context.serialize(uint16: controlValueType.rawValue)
     context.serialize(uint16: UInt16(sourcesOffset))
-    context.serialize(uint16: UInt16(sources.count))
-    context.serialize(uint16: UInt16(sourcesOffset + sources.count * SignalSource.length))
+    try context.serialize(count: sources.count)
+    try context.serialize(count: sourcesOffset + sources.count * SignalSource.length)
     for source in sources {
       try source.serialize(into: &context)
     }
@@ -2262,7 +2263,7 @@ public struct MatrixSignalDescriptor: Sendable, Hashable, CustomStringConvertibl
   }
 
   func serializeBody(into context: inout SerializationContext) throws {
-    context.serialize(uint16: UInt16(signals.count))
+    try context.serialize(count: signals.count)
     context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
     for signal in signals {
       try signal.serialize(into: &context)
@@ -2315,7 +2316,7 @@ public struct SignalSplitterDescriptor: Sendable, Hashable, CustomStringConverti
     context.serialize(uint16: signalIndex)
     context.serialize(uint16: signalOutput)
     context.serialize(uint16: numberOfOutputs)
-    context.serialize(uint16: UInt16(splitterMap.count))
+    try context.serialize(count: splitterMap.count)
     context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
     for mapping in splitterMap {
       mapping.serialize(into: &context)
@@ -2365,10 +2366,10 @@ public struct SignalCombinerDescriptor: Sendable, Hashable, CustomStringConverti
     context.serialize(uint32: blockLatency)
     context.serialize(uint32: controlLatency)
     context.serialize(uint16: controlDomain)
-    context.serialize(uint16: UInt16(combinerMap.count))
+    try context.serialize(count: combinerMap.count)
     context.serialize(uint16: UInt16(mapOffset))
-    context.serialize(uint16: UInt16(mapOffset + combinerMap.count * SubSignalMapping.length))
-    context.serialize(uint16: UInt16(sources.count))
+    try context.serialize(count: mapOffset + combinerMap.count * SubSignalMapping.length)
+    try context.serialize(count: sources.count)
     for mapping in combinerMap {
       mapping.serialize(into: &context)
     }
@@ -2425,7 +2426,7 @@ public struct SignalDemultiplexerDescriptor: Sendable, Hashable, CustomStringCon
     context.serialize(uint16: signalIndex)
     context.serialize(uint16: signalOutput)
     context.serialize(uint16: numberOfOutputs)
-    context.serialize(uint16: UInt16(demultiplexerMap.count))
+    try context.serialize(count: demultiplexerMap.count)
     context.serialize(uint16: UInt16(_descriptorHeaderLength + Self.bodyLength))
     for mapping in demultiplexerMap {
       mapping.serialize(into: &context)
@@ -2475,10 +2476,10 @@ public struct SignalMultiplexerDescriptor: Sendable, Hashable, CustomStringConve
     context.serialize(uint32: blockLatency)
     context.serialize(uint32: controlLatency)
     context.serialize(uint16: controlDomain)
-    context.serialize(uint16: UInt16(multiplexerMap.count))
+    try context.serialize(count: multiplexerMap.count)
     context.serialize(uint16: UInt16(mapOffset))
-    context.serialize(uint16: UInt16(mapOffset + multiplexerMap.count * SubSignalMapping.length))
-    context.serialize(uint16: UInt16(sources.count))
+    try context.serialize(count: mapOffset + multiplexerMap.count * SubSignalMapping.length)
+    try context.serialize(count: sources.count)
     for mapping in multiplexerMap {
       mapping.serialize(into: &context)
     }
@@ -2816,6 +2817,14 @@ extension StreamFormat: SerDes {
 
   public func serialize(into serializationContext: inout SerializationContext) throws {
     serializationContext.serialize(uint64: format)
+  }
+}
+
+private extension SerializationContext {
+  /// Serializes a count, or an offset that follows counted items, into its 16-bit field.
+  mutating func serialize(count: Int) throws {
+    guard let count = UInt16(exactly: count) else { throw AvdeccCodecError.valueTooLarge }
+    serialize(uint16: count)
   }
 }
 
