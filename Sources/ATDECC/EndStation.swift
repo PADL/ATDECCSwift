@@ -40,6 +40,8 @@ public enum PduDestination: Sendable {
 
 // Frames shorter than this are padded, as some drivers do not pad raw sends themselves.
 private let _ethernetMinimumPayloadLength = 46
+// Delays before receiving again on a port that stopped, doubling while it receives nothing.
+private let _receiveRetryDelay = Duration.milliseconds(100)...Duration.seconds(5)
 // The program-specific part of a dynamic entity ID; 0 and 0xFFFF are avoided.
 private let _dynamicEntityIDRange: ClosedRange<UInt16> = 1...0xFFFD
 
@@ -162,22 +164,31 @@ public actor EndStation<Port: NetworkPort> {
   /// Receives on the port while its link is up, receiving again whenever reception ends: a port
   /// can stop receiving (an AF_PACKET socket fails with ENETDOWN when its interface goes down, a
   /// serial device with EIO when it hangs up), and the entities on the end station would
-  /// otherwise hear nothing more.
+  /// otherwise hear nothing more. A port that keeps failing, such as a serial device that has
+  /// gone, is tried again ever less often, and reported to the entities once.
   private func _startReceiving() {
     guard !_isClosed, _receiveTask == nil else { return }
     let port = port
     _receiveTask = Task { [weak self] in
+      var retryDelay: Duration?
       while !Task.isCancelled {
         var failure: (any Error)?
+        var hasReceived = false
         do {
           try await port.receive { packet in
+            hasReceived = true
             await self?._handle(packet)
           }
         } catch {
           failure = error
         }
         guard !Task.isCancelled, let self else { return }
-        await _receiveEnded(failure: failure)
+        if hasReceived { retryDelay = nil }
+        await _receiveEnded(failure: failure, isRepeated: retryDelay != nil)
+        let delay = retryDelay.map { min($0 * 2, _receiveRetryDelay.upperBound) } ??
+          _receiveRetryDelay.lowerBound
+        retryDelay = delay
+        try? await Task.sleep(for: delay)
       }
     }
   }
@@ -220,13 +231,15 @@ public actor EndStation<Port: NetworkPort> {
     _startReceiving()
   }
 
-  private func _receiveEnded(failure: (any Error)?) async {
+  /// `isRepeated` if nothing has been received since reception last ended.
+  private func _receiveEnded(failure: (any Error)?, isRepeated: Bool) async {
     guard !_isClosed else { return }
-    if let failure {
-      logger.error("end station \(_macAddressToString(macAddress)): receive failed: \(failure)")
-    } else {
-      logger.error("end station \(_macAddressToString(macAddress)): reception ended")
+    let reason = failure.map { "receive failed: \($0)" } ?? "reception ended"
+    guard !isRepeated else {
+      logger.debug("end station \(_macAddressToString(macAddress)): \(reason)")
+      return
     }
+    logger.error("end station \(_macAddressToString(macAddress)): \(reason)")
     for controller in _liveControllers {
       await controller._handleTransportError()
     }
