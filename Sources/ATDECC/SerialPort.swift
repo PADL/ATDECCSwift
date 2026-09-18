@@ -177,7 +177,14 @@ public final class SerialPort: NetworkPort {
     var decoder = CobsFrameDecoder(maximumFrameLength: _serialMaximumPayloadLength)
 
     while !Task.isCancelled {
-      let bytes = try await _ring.read(count: _serialReadLength, from: _fileHandle)
+      let bytes: [UInt8]
+      do {
+        bytes = try await _ring.read(count: _serialReadLength, from: _fileHandle)
+      } catch let error as Errno where error.isTransient {
+        // read again, keeping the frame the decoder has part of
+        await Task.yield()
+        continue
+      }
       guard !bytes.isEmpty else { throw Errno(rawValue: EIO) }
 
       for payload in decoder.decode(bytes) {
@@ -212,9 +219,21 @@ private func _write(_ frame: [UInt8], to fileHandle: FileHandle, ring: IORing) a
   var offset = 0
   while offset < frame.count {
     try Task.checkCancellation()
-    let written = try await ring.write(Array(frame[offset...]), to: fileHandle)
-    guard written > 0 else { throw Errno(rawValue: EIO) }
-    offset += written
+    do {
+      let written = try await ring.write(Array(frame[offset...]), to: fileHandle)
+      guard written > 0 else { throw Errno(rawValue: EIO) }
+      offset += written
+    } catch let error as Errno where error.isTransient {
+      // write the rest again: nothing of it was written
+      await Task.yield()
+    }
+  }
+}
+
+private extension Errno {
+  /// An interrupted system call, or one that would block, has done nothing and is made again.
+  var isTransient: Bool {
+    self == .interrupted || self == .resourceTemporarilyUnavailable || self == .wouldBlock
   }
 }
 
