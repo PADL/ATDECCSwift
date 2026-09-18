@@ -127,9 +127,11 @@ public struct EthernetPort: NetworkPort {
   ) async throws {
     let port = try RawEthernetPort(name: interfaceName)
     _resolution.port.withLock { $0 = port }
+    // stream data shares the EtherType, and would crowd ATDECC out of the receive queue
     let packets = try await port.receivePackets(
       etherTypes: [AvtpEtherType],
-      groupAddresses: [AvdeccMulticastMacAddress, AvdeccIdentifyMulticastMacAddress]
+      groupAddresses: [AvdeccMulticastMacAddress, AvdeccIdentifyMulticastMacAddress],
+      subtypes: [AvtpEtherType: [AvtpSubtype.adp.rawValue...AvtpSubtype.acmp.rawValue]]
     )
     await onReady()
     for try await packet in packets {
