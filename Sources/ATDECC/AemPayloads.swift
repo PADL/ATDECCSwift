@@ -1806,13 +1806,15 @@ extension StreamInfo {
 
 extension StreamBackup {
   /// Parses the talkers following descriptor_type and descriptor_index (IEEE 1722.1-2021
-  /// Figure 7-92), each an Entity ID and unique ID.
+  /// Figure 7-92), each an Entity ID, a unique ID and a reserved word.
   init(parsing input: inout ParserSpan) throws {
     func talker() throws -> StreamIdentification {
-      try StreamIdentification(
+      let talker = try StreamIdentification(
         entityID: UniqueIdentifier(parsing: &input),
         streamIndex: UInt16(parsingBigEndian: &input)
       )
+      _ = try UInt16(parsingBigEndian: &input) // reserved
+      return talker
     }
     backupTalker0 = try talker()
     backupTalker1 = try talker()
@@ -1824,6 +1826,7 @@ extension StreamBackup {
     for talker in [backupTalker0, backupTalker1, backupTalker2, backedUpTalker] {
       try context.serialize(talker.entityID)
       context.serialize(uint16: talker.streamIndex)
+      context.serialize(uint16: 0) // reserved
     }
   }
 }
