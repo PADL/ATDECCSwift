@@ -308,7 +308,11 @@ public enum AemCommandPayload: Sendable, Hashable {
          .deregisterUnsolicitedNotification:
       break
     case let .registerUnsolicitedNotification(flags):
-      context.serialize(uint32: flags.rawValue)
+      // no flags is sent as IEEE 1722.1-2013 has it, without the field, which means the same
+      // (§7.4.37.1) and is the only form an entity predating the field need accept
+      if !flags.isEmpty {
+        context.serialize(uint32: flags.rawValue)
+      }
     case let .readDescriptor(configurationIndex, descriptorType, descriptorIndex):
       context.serialize(uint16: configurationIndex)
       context.serialize(uint16: 0) // reserved
