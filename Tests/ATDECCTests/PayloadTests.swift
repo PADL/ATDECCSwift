@@ -187,6 +187,25 @@ final class PayloadTests: XCTestCase {
     XCTAssertEqual(context.bytes, bytes)
   }
 
+  // counts and offsets that do not fit their 16-bit fields are refused, not trapped on
+  func testOversizeDescriptorIsNotSerialized() throws {
+    let bytes = redundantStreamDescriptor(redundantOffset: 152)
+    guard case var (_, _, .streamInput(stream)) = try readDescriptorResponse(bytes) else {
+      return XCTFail("expected STREAM_INPUT")
+    }
+    // the redundant streams would follow the formats at an offset past 65535
+    stream.formats = [StreamFormat](repeating: stream.formats[0], count: 8192)
+    var context = SerializationContext()
+    XCTAssertThrowsError(try Descriptor.streamInput(stream).serialize(descriptorIndex: 0, into: &context)) {
+      XCTAssertEqual($0 as? AvdeccCodecError, .valueTooLarge)
+    }
+    stream.redundantStreams = []
+    stream.formats = [StreamFormat](repeating: stream.formats[0], count: 65536)
+    XCTAssertThrowsError(try Descriptor.streamInput(stream).serialize(descriptorIndex: 0, into: &context)) {
+      XCTAssertEqual($0 as? AvdeccCodecError, .valueTooLarge)
+    }
+  }
+
   func testStreamDescriptorFormatsOverlappingRedundantStreamsRejected() {
     // redundant_offset 144 falls inside the formats at 136..<152
     XCTAssertThrowsError(try readDescriptorResponse(redundantStreamDescriptor(redundantOffset: 144))) {
