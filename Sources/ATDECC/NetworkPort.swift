@@ -126,6 +126,11 @@ public struct EthernetPort: NetworkPort {
     _ handler: (IEEE802Packet) async -> ()
   ) async throws {
     let port = try RawEthernetPort(name: interfaceName)
+    // frames are sent from, and entity IDs derived from, the address the port was opened with;
+    // under another, unicast responses would never arrive, so fail where it can be seen
+    guard _isEqualMacAddress(port.interface.macAddress, macAddress) else {
+      throw Errno.addressNotAvailable
+    }
     _resolution.port.withLock { $0 = port }
     // stream data shares the EtherType, and would crowd ATDECC out of the receive queue
     let packets = try await port.receivePackets(
