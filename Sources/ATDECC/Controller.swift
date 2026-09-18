@@ -355,6 +355,10 @@ public actor Controller<Port: NetworkPort> {
     _maintenanceTask?.cancel()
     _advertising?.timer.stop()
     _transmissions.finish()
+    // a stream whose continuation is merely released never ends for its consumer
+    for continuation in _subscribers.values {
+      continuation.finish()
+    }
   }
 
   /// Fails pending commands, stops advertising (sending ENTITY_DEPARTING), finishes event

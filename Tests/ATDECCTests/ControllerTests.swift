@@ -1335,6 +1335,21 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  func testEventStreamsEndWhenControllerIsReleased() async throws {
+    var controller: Controller<VirtualPort>? = try await makeController()
+    let events = await controller!.events()
+    controller = nil
+    let consumer = Task<Bool, any Error> {
+      for await _ in events {}
+      return true
+    }
+    defer { consumer.cancel() }
+    switch await result(of: consumer) {
+    case .success: break
+    case let result: XCTFail("event stream did not end: \(String(describing: result))")
+    }
+  }
+
   func testCloseFailsPendingCommandsPromptly() async throws {
     let controller = try await makeController()
     // closing deregisters, which is sent on a port whose sends are blocked below
