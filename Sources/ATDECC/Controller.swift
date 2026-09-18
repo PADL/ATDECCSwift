@@ -220,6 +220,8 @@ public actor Controller<Port: NetworkPort> {
     let validTime: UInt8
     let interfaceIndex: UInt16?
     let timer: Timer
+    /// When the timer, if running, next advertises.
+    var deadline = ContinuousClock.now
   }
 
   public nonisolated let entityID: UniqueIdentifier
@@ -500,7 +502,10 @@ public actor Controller<Port: NetworkPort> {
         adpdu.entityID == entityID,
             let advertising = _advertising
       else { return }
-      advertising.timer.start(interval: _randomAdvertisingDelay(validTime: advertising.validTime))
+      _scheduleAdvertisement(
+        after: _randomAdvertisingDelay(validTime: advertising.validTime),
+        onlySooner: true
+      )
     }
   }
 
@@ -512,7 +517,23 @@ public actor Controller<Port: NetworkPort> {
     guard isUp != _lastLinkIsUp else { return }
     _lastLinkIsUp = isUp
     guard isUp, !_isClosed, let advertising = _advertising else { return }
-    advertising.timer.start(interval: _randomAdvertisingDelay(validTime: advertising.validTime))
+    _scheduleAdvertisement(
+      after: _randomAdvertisingDelay(validTime: advertising.validTime),
+      onlySooner: true
+    )
+  }
+
+  /// Advertises after `interval`. With `onlySooner`, an advertisement already due before then
+  /// stands: needsAdvertise does not restart the delay of IEEE 1722.1-2021 Figure 6-2, or
+  /// repeated ENTITY_DISCOVERs would put advertising off for as long as they kept coming.
+  private func _scheduleAdvertisement(after interval: Duration, onlySooner: Bool = false) {
+    guard var advertising = _advertising else { return }
+    let deadline = ContinuousClock.now + interval
+    guard !onlySooner || !advertising.timer.isRunning || deadline < advertising.deadline
+    else { return }
+    advertising.deadline = deadline
+    _advertising = advertising
+    advertising.timer.start(interval: interval)
   }
 
   /// Advertises this controller with ENTITY_AVAILABLE (IEEE 1722.1-2021 §6.2.4), declaring it
@@ -531,7 +552,7 @@ public actor Controller<Port: NetworkPort> {
     }
     _advertising?.timer.stop()
     _advertising = Advertising(validTime: validTime, interfaceIndex: interfaceIndex, timer: timer)
-    timer.start(interval: _randomAdvertisingDelay(validTime: validTime))
+    _scheduleAdvertisement(after: _randomAdvertisingDelay(validTime: validTime))
   }
 
   /// Stops advertising, sending ENTITY_DEPARTING.
@@ -554,7 +575,7 @@ public actor Controller<Port: NetworkPort> {
     _sendAdvertisement(.entityAvailable, advertising)
     // re-advertise after a quarter of the valid period, plus jitter
     let interval = Duration.milliseconds(max(1000, Int(advertising.validTime) * 1000 / 2))
-    advertising.timer.start(interval: interval + _randomAdvertisingDelay(validTime: advertising.validTime))
+    _scheduleAdvertisement(after: interval + _randomAdvertisingDelay(validTime: advertising.validTime))
   }
 
   private func _sendAdvertisement(_ messageType: AdpMessageType, _ advertising: Advertising) {
