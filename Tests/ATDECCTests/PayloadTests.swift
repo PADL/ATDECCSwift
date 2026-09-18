@@ -1078,7 +1078,10 @@ extension PayloadTests {
       try readDescriptorResponse(be16(DescriptorType.audioCluster.rawValue) + be16(0) + body)
     else { return XCTFail("expected AUDIO_CLUSTER") }
     XCTAssertEqual(short.channelCount, 8)
-    XCTAssertEqual(short.aes3DataType, 0)
+    XCTAssertNil(short.aes3DataTypeReference)
+    XCTAssertNil(short.aes3DataType)
+    // an IEEE 1722.1-2013 descriptor is written back at the length it was read
+    try assertDescriptorRoundTrips(be16(DescriptorType.audioCluster.rawValue) + be16(0) + body)
 
     body += [0x01] + be16(0x0002)
     let bytes = be16(DescriptorType.audioCluster.rawValue) + be16(0) + body
@@ -1102,7 +1105,8 @@ extension PayloadTests {
       try readDescriptorResponse(be16(DescriptorType.memoryObject.rawValue) + be16(0) + body)
     else { return XCTFail("expected MEMORY_OBJECT") }
     XCTAssertEqual(short.length, 0x8000)
-    XCTAssertEqual(short.maximumSegmentLength, 0)
+    XCTAssertNil(short.maximumSegmentLength)
+    try assertDescriptorRoundTrips(be16(DescriptorType.memoryObject.rawValue) + be16(0) + body)
 
     body += be64(1400)
     let bytes = be16(DescriptorType.memoryObject.rawValue) + be16(0) + body
@@ -1215,7 +1219,9 @@ extension PayloadTests {
     guard case let (_, _, .avbInterface(shortDescriptor)) =
       try readDescriptorResponse(be16(DescriptorType.avbInterface.rawValue) + be16(0) + body)
     else { return XCTFail("expected AVB_INTERFACE") }
-    XCTAssertEqual(shortDescriptor.numberOfControls, 0)
+    XCTAssertNil(shortDescriptor.numberOfControls)
+    XCTAssertNil(shortDescriptor.baseControl)
+    try assertDescriptorRoundTrips(be16(DescriptorType.avbInterface.rawValue) + be16(0) + body)
     body += be16(2) + be16(3) // number_of_controls, base_control
     let bytes = be16(DescriptorType.avbInterface.rawValue) + be16(0) + body
     guard case let (_, _, .avbInterface(descriptor)) = try readDescriptorResponse(bytes) else {
