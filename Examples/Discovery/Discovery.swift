@@ -18,6 +18,8 @@ import ATDECC
 import Logging
 #if canImport(Glibc)
 import Glibc
+#elseif canImport(Darwin)
+import Darwin
 #endif
 
 /// Discovers ATDECC entities on an Ethernet interface, or on a serial device given as
@@ -36,6 +38,7 @@ enum Discovery {
       exit(1)
     }
 
+    #if os(Linux)
     let name = CommandLine.arguments[1]
     do {
       if name.hasPrefix("/") {
@@ -44,15 +47,30 @@ enum Discovery {
           print("invalid baud rate in \(name)")
           exit(1)
         }
-        try await discover(on: SerialPort(path: String(components[0]), baudRate: baudRate))
+        try await discover(on: open(name) { try SerialPort(path: String(components[0]), baudRate: baudRate) })
       } else {
-        try await discover(on: EthernetPort(interfaceName: name))
+        try await discover(on: open(name) { try EthernetPort(interfaceName: name) })
       }
+    } catch {
+      print("discovery failed: \(error)")
+      exit(2)
+    }
+    #else
+    print("the Ethernet and serial ports are only available on Linux")
+    exit(1)
+    #endif
+  }
+
+  #if os(Linux)
+  private static func open<Port: NetworkPort>(_ name: String, _ port: () throws -> Port) -> Port {
+    do {
+      return try port()
     } catch {
       print("failed to open \(name): \(error)")
       exit(2)
     }
   }
+  #endif
 
   private static func discover<Port: NetworkPort>(on port: Port) async throws {
     let endStation = EndStation(port: port)
