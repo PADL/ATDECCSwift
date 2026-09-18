@@ -95,6 +95,7 @@ public final class SerialPort: NetworkPort {
   private let _ring: IORing
   // frames are written by one task so that concurrent sends, and short writes, never interleave
   private let _transmissions: AsyncStream<Transmission>.Continuation
+  private let _isClosed = Atomic(false)
 
   /// Opens the serial device at `path`, configuring it for raw 8N1 at `baudRate` without
   /// hardware flow control.
@@ -154,8 +155,11 @@ public final class SerialPort: NetworkPort {
     close()
   }
 
-  /// Stops transmission; the device is closed once pending frames are written.
+  /// Stops the port: later sends and receptions fail with EBADF, and a reception in progress
+  /// ends with its next read. Frames already queued are still written. The device itself stays
+  /// open until the port is released, as requests in flight hold it.
   public func close() {
+    _isClosed.store(true, ordering: .relaxed)
     _transmissions.finish()
   }
 
@@ -177,6 +181,7 @@ public final class SerialPort: NetworkPort {
     var decoder = CobsFrameDecoder(maximumFrameLength: _serialMaximumPayloadLength)
 
     while !Task.isCancelled {
+      guard !_isClosed.load(ordering: .relaxed) else { throw Errno(rawValue: EBADF) }
       let bytes: [UInt8]
       do {
         bytes = try await _ring.read(count: _serialReadLength, from: _fileHandle)

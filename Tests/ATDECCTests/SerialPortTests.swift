@@ -242,6 +242,8 @@ final class SerialPortTests: XCTestCase {
       var packet: IEEE802Packet?
       let (stream, continuation) = AsyncStream<IEEE802Packet>.makeStream()
       let task = Task {
+        // a reception that fails ends the wait, rather than leaving it for ever
+        defer { continuation.finish() }
         try await port.receive { continuation.yield($0) }
       }
       for await received in stream {
@@ -265,6 +267,25 @@ final class SerialPortTests: XCTestCase {
       _macAddressToString(packet.destMacAddress),
       _macAddressToString(AvdeccMulticastMacAddress)
     )
+  }
+
+  func testClosedPortNeitherSendsNorReceives() async throws {
+    let port = try SerialPort(path: devicePath)
+    port.close()
+    let packet = IEEE802Packet(
+      destMacAddress: AvdeccMulticastMacAddress,
+      tci: nil,
+      sourceMacAddress: SerialPortLocalMacAddress,
+      etherType: AvtpEtherType,
+      payload: try entityDiscover
+    )
+    for result in [
+      await Task { try await port.send(packet) }.result,
+      await Task { try await port.receive { _ in } }.result,
+    ] {
+      // EBADF
+      guard case .failure = result else { return XCTFail("a closed port should fail") }
+    }
   }
 
   func testOpenClearsHardwareFlowControl() throws {
