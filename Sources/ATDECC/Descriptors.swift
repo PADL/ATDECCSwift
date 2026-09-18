@@ -1686,9 +1686,6 @@ public struct SensorUnitDescriptor: Sendable, Hashable, CustomStringConvertible 
   public var baseTranscoder: UInt16
   public var numberOfControlBlocks: UInt16
   public var baseControlBlock: UInt16
-  /// The TIMING descriptor that is the source of the unit's gPTP time; nil when the descriptor
-  /// has no timing field.
-  public var timing: DescriptorIndex?
 
   init(parsingBody input: inout ParserSpan) throws {
     try input.requireRemaining(Self.bodyLength)
@@ -1727,7 +1724,6 @@ public struct SensorUnitDescriptor: Sendable, Hashable, CustomStringConvertible 
     baseTranscoder = try UInt16(parsingBigEndian: &input)
     numberOfControlBlocks = try UInt16(parsingBigEndian: &input)
     baseControlBlock = try UInt16(parsingBigEndian: &input)
-    timing = input.count >= MemoryLayout<UInt16>.size ? try UInt16(parsingBigEndian: &input) : nil
   }
 
   func serializeBody(into context: inout SerializationContext) throws {
@@ -1753,9 +1749,6 @@ public struct SensorUnitDescriptor: Sendable, Hashable, CustomStringConvertible 
       numberOfControlBlocks, baseControlBlock,
     ] {
       context.serialize(uint16: value)
-    }
-    if let timing {
-      context.serialize(uint16: timing)
     }
   }
 
