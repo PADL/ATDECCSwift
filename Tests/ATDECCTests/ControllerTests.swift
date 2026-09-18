@@ -1503,6 +1503,29 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  /// A registration whose command was lost is not retried once it has been deregistered, or
+  /// the entity would stay registered with a controller that no longer renews or deregisters.
+  func testRegistrationRetryDoesNotFollowUnregister() async throws {
+    let controller = try await makeController()
+    entity.behaviour.withLock { $0.commandsToDrop = 1 }
+    let registration = Task {
+      try await controller.registerUnsolicitedNotifications(id: entityID)
+    }
+    let isRegister = isCommand(.registerUnsolicitedNotification)
+    let sent = await entity.waitUntilReceived(1, where: isRegister)
+    XCTAssertTrue(sent)
+
+    try await controller.unregisterUnsolicitedNotifications(id: entityID)
+    switch await result(of: registration) {
+    case .failure(is CancellationError): break
+    case let result: XCTFail("expected CancellationError, got \(String(describing: result))")
+    }
+    // the retry would follow the 250 ms AECP timeout
+    try await Task.sleep(for: .milliseconds(400))
+    XCTAssertEqual(entity.receivedCount(where: isRegister), 1)
+    await controller.close()
+  }
+
   func testRenewalRetryDoesNotFollowUnregister() async throws {
     let timing = ControllerTiming(
       unsolicitedNotificationRenewalInterval: .milliseconds(100),
