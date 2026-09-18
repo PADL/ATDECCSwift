@@ -1106,21 +1106,17 @@ extension PayloadTests {
     XCTAssertEqual(context.bytes, bytes, file: file, line: line)
   }
 
-  // IEEE 1722.1-2021 Table 7-7: SENSOR_UNIT's timing follows base_control_block
+  // IEEE 1722.1-2021 Table 7-7: SENSOR_UNIT ends with base_control_block, at 136 octets
   func testSensorUnitDescriptor() throws {
     let counts = (0..<UInt16(33)).flatMap { be16($0) } // clock_domain_index to base_control_block
     let body = fixedString("Sensor") + be16(0xFFFF) + counts
-    let short = be16(DescriptorType.sensorUnit.rawValue) + be16(0) + body
-    guard case let (_, _, .sensorUnit(unit)) = try readDescriptorResponse(short) else {
+    let bytes = be16(DescriptorType.sensorUnit.rawValue) + be16(0) + body
+    XCTAssertEqual(bytes.count, 136)
+    guard case let (_, _, .sensorUnit(unit)) = try readDescriptorResponse(bytes) else {
       return XCTFail("expected SENSOR_UNIT")
     }
-    XCTAssertNil(unit.timing)
+    XCTAssertEqual(unit.clockDomainIndex, 0)
     XCTAssertEqual(unit.baseControlBlock, 32)
-    let bytes = short + be16(2)
-    guard case let (_, _, .sensorUnit(timed)) = try readDescriptorResponse(bytes) else {
-      return XCTFail("expected SENSOR_UNIT")
-    }
-    XCTAssertEqual(timed.timing, 2)
     try assertDescriptorRoundTrips(bytes)
   }
 
