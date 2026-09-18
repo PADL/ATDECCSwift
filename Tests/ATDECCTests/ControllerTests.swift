@@ -730,6 +730,23 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  /// Nothing is kept, or reported, for an entity that is not discovered.
+  func testIdentifyNotificationFromUndiscoveredEntityIsIgnored() async throws {
+    let controller = try await makeController()
+    let events = await controller.events()
+    try await entity.advertise(.entityDeparting)
+    let offline = await first(events) {
+      if case .entityOffline(entityID) = $0 { true } else { false }
+    }
+    XCTAssertNotNil(offline)
+    try await entity.sendIdentifyNotification(sequenceID: 0)
+    let identified = await first(events, timeout: .milliseconds(200)) {
+      if case .entityIdentifyNotification = $0 { true } else { false }
+    }
+    XCTAssertNil(identified)
+    await controller.close()
+  }
+
   // another controller's INCREMENT_CONTROL notifies the control's new values (§7.5.2)
   func testUnsolicitedIncrementControl() async throws {
     let controller = try await makeController()

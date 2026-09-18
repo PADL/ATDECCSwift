@@ -917,7 +917,9 @@ public actor Controller<Port: NetworkPort> {
       }
       if aem.unsolicited, aem.controllerEntityID == IdentifyNotificationControllerEntityID {
         // each is sent three times with one sequence_id, and a held button sends the next one
-        // every second (IEEE 1722.1-2021 §7.5.1)
+        // every second (IEEE 1722.1-2021 §7.5.1); sequence IDs are kept for discovered entities
+        // only, and forgotten with them, so that they cannot accumulate
+        guard _discovery.entity(id: aem.targetEntityID) != nil else { return }
         if _identifySequenceIDs.updateValue(aem.sequenceID, forKey: aem.targetEntityID) != aem.sequenceID {
           _yield(.entityIdentifyNotification(aem.targetEntityID))
         }
