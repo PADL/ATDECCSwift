@@ -346,7 +346,10 @@ public struct StreamFormat: CustomStringConvertible, Equatable, Hashable, Sendab
       guard let format = aafFormat, let formatBitDepth = format.bitDepth else {
         return nil
       }
-      return formatBitDepth > aafBitDepth ? aafBitDepth : formatBitDepth
+      // a non-integer format sets bit_depth to zero (IEEE 1722-2016 §I.2.4.1), though the
+      // AVTPDU carries 32 (§7.3.4); either way every bit of the sample is used
+      guard !aafIsFloatingPoint, aafBitDepth != 0 else { return formatBitDepth }
+      return min(aafBitDepth, formatBitDepth)
     default:
       return nil
     }
