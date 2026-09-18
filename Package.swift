@@ -5,9 +5,6 @@ import PackageDescription
 let CommonSwiftSettings: [SwiftSetting] = [
   .enableExperimentalFeature("StrictConcurrency"),
   .enableExperimentalFeature("NonisolatedNonsendingByDefault"),
-  // NetLinkSwift's libnl module map includes <netlink/...> headers from here, and the importer of
-  // every module that imports it, tests included, needs the path
-  .unsafeFlags(["-Xcc", "-I/usr/include/libnl3"], .when(platforms: [.linux])),
 ]
 
 let package = Package(
