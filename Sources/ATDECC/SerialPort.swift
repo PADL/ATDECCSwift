@@ -87,6 +87,9 @@ public final class SerialPort: NetworkPort {
   public let path: String
   public let macAddress: EUI48
   public let peerMacAddress: EUI48
+  /// One by default. The peer answers in turn, and at UART rates the responses to several
+  /// commands sent together take longer to arrive than the last of them is given to be answered.
+  public let maximumInflightAecpCommands: Int
 
   let _fileHandle: FileHandle
   private let _ring: IORing
@@ -105,6 +108,7 @@ public final class SerialPort: NetworkPort {
     baudRate: Int = 115_200,
     macAddress: EUI48 = SerialPortLocalMacAddress,
     peerMacAddress: EUI48 = SerialPortPeerMacAddress,
+    maximumInflightAecpCommands: Int = 1,
     ring: IORing = .shared
   ) throws {
     let speed = try _speed(baudRate: baudRate)
@@ -130,6 +134,7 @@ public final class SerialPort: NetworkPort {
     self.path = path
     self.macAddress = macAddress
     self.peerMacAddress = peerMacAddress
+    self.maximumInflightAecpCommands = max(maximumInflightAecpCommands, 1)
     _fileHandle = fileHandle
     _ring = ring
 

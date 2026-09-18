@@ -19,9 +19,6 @@ import Logging
 
 // MARK: - Timing
 
-/// Commands in flight to one entity at a time; further commands queue (as la_avdecc does).
-private let _maximumInflightAecpCommands = 10
-
 /// The ACMP command timeouts a controller uses.
 public enum AcmpCommandTimeouts: Sendable {
   /// IEEE 1722.1-2021 Table 8-1, in which a listener answers CONNECT_RX only after its talker.
@@ -50,6 +47,9 @@ struct ControllerTiming: Sendable {
   /// Timeout of every AECP command (IEEE 1722.1-2021 §9.3.2.6); an IN_PROGRESS response
   /// restarts it.
   var aecpCommandTimeout = Duration.milliseconds(250)
+  /// Commands in flight to one entity at a time, further commands queueing (as la_avdecc
+  /// does); the port's `maximumInflightAecpCommands` if nil.
+  var maximumInflightAecpCommands: Int?
   var acmpCommandTimeouts = AcmpCommandTimeouts.ieee1722_1
   /// How often a time-limited unsolicited notification registration is renewed (IEEE
   /// 1722.1-2021 §7.4.37.2).
@@ -143,7 +143,8 @@ private extension Duration {
 ///
 /// Where the specification leaves room, or differs from la_avdecc on the wire, the controller
 /// behaves as la_avdecc does:
-/// - At most ten AECP commands are in flight to an entity; further commands wait in a queue.
+/// - At most ten AECP commands are in flight to an entity, or as many as the port allows;
+///   further commands wait in a queue.
 /// - An AECP command is retried once on timeout, including after IN_PROGRESS responses
 ///   (Figure 9-4). ACMP commands are also retried once (Figure 8-2).
 /// - ACMPDUs are sent with the 2013 control_data_length (see `Acmpdu.length`).
@@ -225,6 +226,7 @@ public actor Controller<Port: NetworkPort> {
   public nonisolated let endStation: EndStation<Port>
   private nonisolated let _logger: Logger
   private nonisolated let _timing: ControllerTiming
+  private nonisolated let _maximumInflightAecpCommands: Int
 
   private var _subscribers = [Int: AsyncStream<ControllerEvent>.Continuation]()
   private var _nextSubscriberID = 0
@@ -276,6 +278,9 @@ public actor Controller<Port: NetworkPort> {
     self.entityID = entityID
     _logger = logger ?? endStation.logger
     _timing = timing
+    _maximumInflightAecpCommands = max(
+      timing.maximumInflightAecpCommands ?? endStation.port.maximumInflightAecpCommands, 1
+    )
     let transmissions: AsyncStream<Transmission>
     (transmissions, _transmissions) = AsyncStream.makeStream()
     try await endStation.register(self)
