@@ -73,6 +73,24 @@ private let _controllerAcmpResponses: Set<AcmpMessageType> = [
   .connectRxResponse, .disconnectRxResponse, .getRxStateResponse, .getTxConnectionResponse,
 ]
 
+/// Commands a talker answers; a listener answers the others.
+private let _talkerAcmpCommands: Set<AcmpMessageType> = [
+  .connectTxCommand, .disconnectTxCommand, .getTxStateCommand, .getTxConnectionCommand,
+]
+
+/// Whether `response` is to `command`, given that its type and sequence_id are. A talker's
+/// response to a listener acting for a controller carries that controller's ID but the
+/// listener's sequence_id, which can equal that of a command the controller itself sent.
+private func _isAcmpResponse(_ response: Acmpdu, to command: Acmpdu) -> Bool {
+  let isSameTalker = response.talkerEntityID == command.talkerEntityID &&
+    response.talkerUniqueID == command.talkerUniqueID
+  let isSameListener = response.listenerEntityID == command.listenerEntityID &&
+    response.listenerUniqueID == command.listenerUniqueID
+  guard _talkerAcmpCommands.contains(command.messageType) else { return isSameListener }
+  // a talker fills in the listener of the commands that do not name one
+  return isSameTalker && (isSameListener || command.listenerEntityID == UniqueIdentifier())
+}
+
 /// The fixed-size GET commands GET_DYNAMIC_INFO can carry (IEEE 1722.1-2021 §7.4.76.2).
 private let _dynamicInfoCommandTypes: Set<AemCommandType> = [
   .getConfiguration, .getStreamFormat, .getVideoFormat, .getSensorFormat, .getStreamInfo, .getName,
@@ -1397,7 +1415,9 @@ public actor Controller<Port: NetworkPort> {
     guard acmpdu.messageType.isResponse else { return }
 
     if acmpdu.controllerEntityID == entityID,
-       _acmpTransactions[acmpdu.sequenceID]?.acmpdu.messageType.response == acmpdu.messageType
+       let command = _acmpTransactions[acmpdu.sequenceID]?.acmpdu,
+       command.messageType.response == acmpdu.messageType,
+       _isAcmpResponse(acmpdu, to: command)
     {
       _completeAcmpCommand(sequenceID: acmpdu.sequenceID, with: .success(acmpdu))
     }

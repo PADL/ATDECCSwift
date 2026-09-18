@@ -1021,6 +1021,30 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  /// A talker's response to a listener acting for this controller carries the controller's ID
+  /// and the listener's sequence_id, which may be that of a command of the controller's own.
+  func testAcmpResponseForAnotherStreamDoesNotCompleteCommand() async throws {
+    let controller = try await makeController()
+    let command = Task {
+      try await controller.disconnectTalkerStream(talker: talkerStream, listener: listenerStream)
+    }
+    let sent = await entity.firstReceived {
+      if case let .acmp(acmpdu) = $0 { acmpdu.messageType == .disconnectTxCommand } else { false }
+    }
+    guard case var .acmp(response) = sent else { return XCTFail("DISCONNECT_TX_COMMAND not sent") }
+    response.messageType = .disconnectTxResponse
+
+    var other = response
+    other.listenerUniqueID = 7
+    other.connectionCount = 3
+    try await entity.send(.acmp(other), to: AvdeccMulticastMacAddress)
+    try await entity.send(.acmp(response), to: AvdeccMulticastMacAddress)
+    let state = try await command.value
+    XCTAssertEqual(state.listenerStream, listenerStream)
+    XCTAssertEqual(state.connectionCount, 0)
+    await controller.close()
+  }
+
   func testSniffedConnectResponse() async throws {
     let controller = try await makeController()
     let events = await controller.events()
