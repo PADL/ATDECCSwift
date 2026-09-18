@@ -32,6 +32,10 @@ public protocol NetworkPort: Sendable {
   /// Source address of transmitted frames.
   var macAddress: EUI48 { get }
 
+  /// The most AECP commands a controller keeps in flight to one entity through this port;
+  /// ten, as la_avdecc has, unless the port says otherwise.
+  var maximumInflightAecpCommands: Int { get }
+
   func send(_ packet: IEEE802Packet) async throws
 
   /// Receives AVTP frames addressed to this port or to the AVDECC group addresses, calling
@@ -45,6 +49,8 @@ public protocol NetworkPort: Sendable {
 }
 
 public extension NetworkPort {
+  var maximumInflightAecpCommands: Int { 10 }
+
   /// A port without link state, such as a point-to-point serial link, is always up.
   func monitorLinkState(_ handler: (Bool) async -> ()) async throws {
     await handler(true)

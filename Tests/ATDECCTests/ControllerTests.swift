@@ -1214,6 +1214,32 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  /// A port such as a UART has its controller send one command at a time.
+  func testInflightLimitOfOne() async throws {
+    let timing = ControllerTiming(aecpCommandTimeout: .seconds(10), maximumInflightAecpCommands: 1)
+    let controller = try await makeController(timing: timing)
+    entity.behaviour.withLock { $0.holdResponses = true }
+    let commands = (0..<3).map { index in
+      Task {
+        try await controller.lockEntity(id: entityID, descriptorIndex: UInt16(index))
+      }
+    }
+    let isLock = isCommand(.lockEntity)
+    let inflight = await entity.waitUntilReceived(1, where: isLock)
+    XCTAssertTrue(inflight)
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(entity.receivedCount(where: isLock), 1)
+
+    await entity.releaseHeldResponses()
+    for (index, command) in commands.enumerated() {
+      switch await result(of: command) {
+      case .success: break
+      case let result: XCTFail("command \(index): \(String(describing: result))")
+      }
+    }
+    await controller.close()
+  }
+
   func testCloseFailsPendingCommandsPromptly() async throws {
     let controller = try await makeController()
     // closing deregisters, which is sent on a port whose sends are blocked below
