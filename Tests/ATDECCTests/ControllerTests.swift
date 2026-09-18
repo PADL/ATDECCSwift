@@ -922,6 +922,30 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  /// An ENTITY_DISCOVER does not restart a delay already pending (IEEE 1722.1-2021 Figure
+  /// 6-2): discovers that keep coming would otherwise keep putting the advertisement off.
+  func testRepeatedDiscoverDoesNotPostponeAdvertising() async throws {
+    let controller = try await makeController()
+    try await controller.enableEntityAdvertising(availableDuration: .seconds(2))
+    let isAvailable: (AvdeccPdu) -> Bool = {
+      if case let .adp(adpdu) = $0 { adpdu.messageType == .entityAvailable && adpdu.entityID == controllerEntityID } else { false }
+    }
+    // the delay is up to 400 ms; discovers arrive far more often than that throughout
+    let discovering = Task { [entity = entity!] in
+      while !Task.isCancelled {
+        try? await entity.send(
+          .adp(Adpdu(messageType: .entityDiscover, validTime: 0, entityID: UniqueIdentifier())),
+          to: AvdeccMulticastMacAddress
+        )
+        try? await Task.sleep(for: .milliseconds(5))
+      }
+    }
+    defer { discovering.cancel() }
+    let advertised = await entity.firstReceived(timeout: .milliseconds(800), where: isAvailable)
+    XCTAssertNotNil(advertised)
+    await controller.close()
+  }
+
   // MARK: - ACMP
 
   func testConnectStream() async throws {
