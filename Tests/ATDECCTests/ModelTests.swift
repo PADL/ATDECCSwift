@@ -83,6 +83,18 @@ final class ModelTests: XCTestCase {
     XCTAssertNil(reservedInt.bitDepth)
   }
 
+  // IEEE 1722-2016 §I.2.4.1: FLOAT_32BIT has a bit_depth of zero, where the AVTPDU has 32
+  func testAafFloatFormat() {
+    for format in [0x0205_0100_0040_6000, 0x0205_0120_0040_6000] as [UInt64] {
+      let format = StreamFormat(format: format)
+      XCTAssertEqual(format.isFloatingPoint, true)
+      XCTAssertEqual(format.sampleRate, 48000)
+      XCTAssertEqual(format.bitDepth, 32)
+    }
+    // 24 bits used of an INT_32BIT sample
+    XCTAssertEqual(StreamFormat(format: 0x0205_0218_0040_6000).bitDepth, 24)
+  }
+
   func testAafFormatString() {
     let format = StreamFormat(format: 0x0205_0220_0040_6000)
     XCTAssertEqual(format.version, .version_0)
