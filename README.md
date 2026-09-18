@@ -23,14 +23,14 @@ entities, which responses raise notifications) deliberately matches it.
 | Surface | Status |
 |---|---|
 | ADP discovery (§6.2.6) and controller advertising (§6.2.4) | ✓ |
-| AEM commands (§7.4) | ✓ acquire/lock, entity/controller available, READ_DESCRIPTOR, configuration, stream format/info, names, association, sampling rate, clock source, controls, start/stop streaming, unsolicited notifications, AVB info, AS path, counters, reboot, audio maps, operations, memory object length, max transit time |
-| AEM descriptors (§7.2) | ✓ entity, configuration, audio unit, stream, jack, AVB interface, clock source, memory object, locale, strings, stream/external/internal port, audio cluster, audio map, control, clock domain, timing, PTP instance, PTP port |
+| AEM commands (§7.4) | ✓ acquire/lock, entity/controller available, READ_DESCRIPTOR, configuration, stream format/info, names, association, sampling rate, clock source, controls, start/stop streaming, unsolicited notifications, AVB info, AS path, counters, reboot, audio maps, operations, memory object length, max transit time, WRITE_DESCRIPTOR, GET_DYNAMIC_INFO, stream backup, sampling rate range, path latency, video and sensor formats and maps, signal selectors, mixers and matrices, PTP instance and port commands other than PTP_PORT_INFO |
+| AEM descriptors (§7.2) | ✓ entity, configuration, audio unit, stream, jack, AVB interface, clock source, memory object, locale, strings, stream/external/internal port, audio cluster, audio map, control, clock domain, timing, PTP instance, PTP port, video and sensor unit/cluster/map, signal selector, mixer, matrix, matrix signal, signal splitter/combiner/demultiplexer/multiplexer/transcoder, control block |
 | Milan MVU commands | ✓ GET_MILAN_INFO, system unique ID, media clock reference info, BIND_STREAM, UNBIND_STREAM, GET_STREAM_INPUT_INFO_EX |
 | ACMP controller commands and sniffing (§8.2) | ✓ |
 | Unsolicited notifications as events (§7.5.2) | ✓ |
 | Raw PDU send | ✓ |
 | Serial (UART) transport | ✓ COBS-framed AVTPDUs |
-| Not yet | WRITE_DESCRIPTOR, video/sensor formats and maps, signal selectors/mixers/matrices, authentication and security, GET_DYNAMIC_INFO, address access, entity responder |
+| Not yet | authentication and security, SET/GET_PTP_PORT_INFO, address access, entity responder |
 
 ## Quick taste
 
@@ -108,7 +108,8 @@ swift test
 ```
 
 The tests run controllers against a simulated entity on a `VirtualNetwork` and need no network
-access or privileges.
+access or privileges. The serial port tests use a pseudo-terminal and io_uring, which Docker's
+default seccomp profile blocks: run a container with `--security-opt seccomp=unconfined`.
 
 Sending and receiving raw Ethernet needs `CAP_NET_RAW`. Either run as root, or grant the
 capability to the binary:
