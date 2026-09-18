@@ -1172,6 +1172,21 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  /// Entities that came while the link was down are found when reception begins again.
+  func testDiscoversWhenReceptionBegins() async throws {
+    let controller = try await makeController()
+    let isDiscover: (AvdeccPdu) -> Bool = {
+      if case let .adp(adpdu) = $0 { adpdu.messageType == .entityDiscover } else { false }
+    }
+    XCTAssertEqual(entity.receivedCount(where: isDiscover), 1)
+    controllerPort.setLinkUp(false)
+    try await Task.sleep(for: .milliseconds(20))
+    controllerPort.setLinkUp(true)
+    let discovered = await entity.waitUntilReceived(2, where: isDiscover)
+    XCTAssertTrue(discovered)
+    await controller.close()
+  }
+
   // MARK: - Transmission
 
   func testReceptionContinuesWhileSendIsBlocked() async throws {

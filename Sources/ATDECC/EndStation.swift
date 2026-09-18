@@ -61,6 +61,8 @@ public actor EndStation<Port: NetworkPort> {
   private var _receiveTask: Task<(), Never>?
   private var _linkStateTask: Task<(), Never>?
   private var _isClosed = false
+  /// Whether the port is receiving, so that answers to an ENTITY_DISCOVER would be heard.
+  private(set) var isReceiving = false
 
   public init(port: Port, logger: Logger = Logger(label: "com.padl.AVDECCSwift")) {
     self.port = port
@@ -79,6 +81,7 @@ public actor EndStation<Port: NetworkPort> {
   /// Stops receiving; entities on the end station stop receiving PDUs. Idempotent.
   public func close() {
     _isClosed = true
+    isReceiving = false
     _receiveTask?.cancel()
     _receiveTask = nil
     _linkStateTask?.cancel()
@@ -175,7 +178,9 @@ public actor EndStation<Port: NetworkPort> {
         var failure: (any Error)?
         var hasReceived = false
         do {
-          try await port.receive { packet in
+          try await port.receive {
+            await self?._receptionBegan()
+          } _: { packet in
             hasReceived = true
             await self?._handle(packet)
           }
@@ -196,6 +201,16 @@ public actor EndStation<Port: NetworkPort> {
   private func _stopReceiving() {
     _receiveTask?.cancel()
     _receiveTask = nil
+    isReceiving = false
+  }
+
+  /// Entities already on the network are discovered once their answers can be received.
+  private func _receptionBegan() async {
+    guard !_isClosed, !Task.isCancelled else { return }
+    isReceiving = true
+    for controller in _liveControllers {
+      await controller._handleReceptionBegan()
+    }
   }
 
   private func _startMonitoringLinkState() {
@@ -233,6 +248,7 @@ public actor EndStation<Port: NetworkPort> {
 
   /// `isRepeated` if nothing has been received since reception last ended.
   private func _receiveEnded(failure: (any Error)?, isRepeated: Bool) async {
+    isReceiving = false
     guard !_isClosed else { return }
     let reason = failure.map { "receive failed: \($0)" } ?? "reception ended"
     guard !isRepeated else {
