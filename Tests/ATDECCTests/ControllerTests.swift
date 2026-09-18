@@ -62,6 +62,8 @@ private final class FakeEntity: Sendable {
     var dropAcmpCommands = false
     /// The status of CONNECT_RX_RESPONSE.
     var acmpStatus = UInt8(0)
+    /// As an entity predating IEEE 1722.1-2021, which knows no flags field, might.
+    var rejectsRegistrationFlags = false
   }
 
   let port: VirtualPort
@@ -259,6 +261,11 @@ private final class FakeEntity: Sendable {
       guard behaviour.commandsToDrop == 0 else {
         behaviour.commandsToDrop -= 1
         return (true, 0, behaviour.status)
+      }
+      if behaviour.rejectsRegistrationFlags, command.commandType == .registerUnsolicitedNotification,
+         !command.commandSpecificData.isEmpty
+      {
+        return (false, 0, AemStatus.badArguments)
       }
       return (false, behaviour.inProgressResponses, behaviour.status)
     }
@@ -1551,6 +1558,24 @@ final class ControllerTests: XCTestCase {
     // the retry would follow the 250 ms AECP timeout
     try await Task.sleep(for: .milliseconds(400))
     XCTAssertEqual(entity.receivedCount(where: isRegister), 1)
+    await controller.close()
+  }
+
+  /// An entity that rejects the flags field is registered with the IEEE 1722.1-2013 command,
+  /// which has none.
+  func testRegistersWithoutFlagsFieldWhenFlagsAreRejected() async throws {
+    let controller = try await makeController()
+    entity.behaviour.withLock { $0.rejectsRegistrationFlags = true }
+    try await controller.registerUnsolicitedNotifications(id: entityID)
+    let payloads = entity.received.withLock { received in
+      received.compactMap { pdu -> [UInt8]? in
+        guard case let .aecp(.aem(aem)) = pdu, !aem.isResponse,
+              aem.commandType == .registerUnsolicitedNotification
+        else { return nil }
+        return aem.commandSpecificData
+      }
+    }
+    XCTAssertEqual(payloads, [[0x00, 0x00, 0x00, 0x01], []])
     await controller.close()
   }
 
