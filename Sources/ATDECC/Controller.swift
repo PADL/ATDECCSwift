@@ -66,7 +66,8 @@ struct ControllerTiming: Sendable {
 private let _availableDurationRange = Duration.seconds(2)...Duration.seconds(62)
 
 /// Responses that complete this controller's ACMP commands without also being reported as
-/// sniffed. The set is la_avdecc's rather than that of IEEE 1722.1-2021 §8.2.3, which also
+/// sniffed; one that completes none, arriving after its command timed out, is reported, as
+/// nothing else tells of the connection it made or broke. The set is la_avdecc's rather than that of IEEE 1722.1-2021 §8.2.3, which also
 /// includes GET_TX_STATE_RESPONSE: other responses carrying a controller's ID, including a
 /// talker's responses to a listener acting on its behalf, are reported as sniffed as well.
 private let _controllerAcmpResponses: Set<AcmpMessageType> = [
@@ -1414,17 +1415,17 @@ public actor Controller<Port: NetworkPort> {
   func _handle(_ acmpdu: Acmpdu) {
     guard acmpdu.messageType.isResponse else { return }
 
+    var isCompletion = false
     if acmpdu.controllerEntityID == entityID,
        let command = _acmpTransactions[acmpdu.sequenceID]?.acmpdu,
        command.messageType.response == acmpdu.messageType,
        _isAcmpResponse(acmpdu, to: command)
     {
       _completeAcmpCommand(sequenceID: acmpdu.sequenceID, with: .success(acmpdu))
+      isCompletion = true
     }
 
-    guard acmpdu.controllerEntityID != entityID ||
-      !_controllerAcmpResponses.contains(acmpdu.messageType)
-    else { return }
+    guard !isCompletion || !_controllerAcmpResponses.contains(acmpdu.messageType) else { return }
 
     let state = StreamConnectionState(acmpdu)
     let status = AcmpStatus(UInt16(acmpdu.status))
