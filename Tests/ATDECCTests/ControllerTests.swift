@@ -915,6 +915,17 @@ final class ControllerTests: XCTestCase {
     let advertisements = entity.receivedCount(where: isAvailable)
     try await Task.sleep(for: .milliseconds(1500))
     XCTAssertEqual(entity.receivedCount(where: isAvailable), advertisements)
+
+    // advertising again begins a new availability cycle (§6.2.2.15)
+    try await controller.enableEntityAdvertising(availableDuration: .seconds(2))
+    let advertisedAgain = await entity.waitUntilReceived(advertisements + 1, where: isAvailable)
+    XCTAssertTrue(advertisedAgain)
+    let availableIndices = entity.received.withLock { received in
+      received.compactMap { pdu -> UInt32? in
+        if case let .adp(adpdu) = pdu, isAvailable(pdu) { adpdu.availableIndex } else { nil }
+      }
+    }
+    XCTAssertEqual(availableIndices.last, 0)
     await controller.close()
   }
 

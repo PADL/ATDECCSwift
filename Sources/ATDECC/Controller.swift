@@ -618,9 +618,8 @@ public actor Controller<Port: NetworkPort> {
       availableIndex: isAvailable ? _availableIndex : 0,
       interfaceIndex: advertising.interfaceIndex ?? 0
     )
-    if isAvailable {
-      _availableIndex &+= 1
-    }
+    // departing ends an availability cycle, and the next begins from zero
+    _availableIndex = isAvailable ? _availableIndex &+ 1 : 0
     _transmissions.yield(.pdu(.adp(adpdu), destination: AvdeccMulticastMacAddress))
   }
 
