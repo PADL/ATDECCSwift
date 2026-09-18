@@ -1045,6 +1045,38 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
+  /// A listener that answers after its command has timed out has still connected.
+  func testLateAcmpResponseIsReported() async throws {
+    var timing = ControllerTiming()
+    timing.acmpCommandTimeouts = .milan
+    let controller = try await makeController(timing: timing)
+    let events = await controller.events()
+    entity.behaviour.withLock { $0.dropAcmpCommands = true }
+    do {
+      _ = try await controller.connectStream(talker: talkerStream, listener: listenerStream)
+      XCTFail("expected a timeout")
+    } catch {
+      XCTAssertEqual(error as? AcmpStatus, .timedOut)
+    }
+
+    let sent = await entity.firstReceived {
+      if case let .acmp(acmpdu) = $0 { acmpdu.messageType == .connectRxCommand } else { false }
+    }
+    guard case var .acmp(response) = sent else { return XCTFail("CONNECT_RX_COMMAND not sent") }
+    response.messageType = .connectRxResponse
+    response.connectionCount = 1
+    try await entity.send(.acmp(response), to: AvdeccMulticastMacAddress)
+    let reported = await first(events) {
+      if case let .controllerConnectResponse(state, .success) = $0 {
+        state.listenerStream == listenerStream
+      } else {
+        false
+      }
+    }
+    XCTAssertNotNil(reported)
+    await controller.close()
+  }
+
   func testSniffedConnectResponse() async throws {
     let controller = try await makeController()
     let events = await controller.events()
