@@ -222,8 +222,9 @@ public actor Controller<Port: NetworkPort> {
     var renewalTime: ContinuousClock.Instant
     /// The delay before the last retry of a failed renewal; nil once a renewal succeeds.
     var retryDelay: Duration?
-    /// The renewal in progress. It is cancelled when the registration is dropped, so that its
-    /// AECP retry cannot register again after a deregistration.
+    /// The registration, then the renewal, in progress. Each is cancelled when the registration
+    /// is dropped, so that its AECP retry cannot register again after a deregistration.
+    var registering: Task<Bool?, any Error>?
     var renewal: Task<(), Never>?
   }
 
@@ -633,20 +634,24 @@ public actor Controller<Port: NetworkPort> {
     _nextUnsolicitedNotificationRegistration += 1
     // recorded before sending, so that deregistering during the command supersedes it
     _dropUnsolicitedNotificationRegistration(targetEntityID)
+    let registering = Task { [weak self] in
+      try await self?._sendUnsolicitedNotificationRegistration(targetEntityID)
+    }
     _unsolicitedNotificationRegistrations[targetEntityID] = UnsolicitedNotificationRegistration(
       id: id,
-      renewalTime: .now + _timing.unsolicitedNotificationRenewalInterval
+      renewalTime: .now + _timing.unsolicitedNotificationRenewalInterval,
+      registering: registering
     )
 
     let isTimeLimited: Bool
     do {
-      do {
-        _ = try await _aem(targetEntityID, .registerUnsolicitedNotification(flags: .timeLimited))
-        isTimeLimited = true
-      } catch AemStatus.badArguments {
-        _ = try await _aem(targetEntityID, .registerUnsolicitedNotification(flags: []))
-        isTimeLimited = false
+      let result = try await withTaskCancellationHandler {
+        try await registering.value
+      } onCancel: {
+        registering.cancel()
       }
+      guard let result else { throw CancellationError() }
+      isTimeLimited = result
     } catch {
       if _unsolicitedNotificationRegistrations[targetEntityID]?.id == id {
         _dropUnsolicitedNotificationRegistration(targetEntityID)
@@ -658,8 +663,23 @@ public actor Controller<Port: NetworkPort> {
           registration.id == id
     else { return }
     registration.isTimeLimited = isTimeLimited
+    registration.registering = nil
     registration.renewalTime = .now + _timing.unsolicitedNotificationRenewalInterval
     _unsolicitedNotificationRegistrations[targetEntityID] = registration
+  }
+
+  /// Returns whether the entity accepted a time-limited registration.
+  private func _sendUnsolicitedNotificationRegistration(
+    _ targetEntityID: UniqueIdentifier
+  ) async throws -> Bool {
+    do {
+      _ = try await _aem(targetEntityID, .registerUnsolicitedNotification(flags: .timeLimited))
+      return true
+    } catch AemStatus.badArguments {
+      try Task.checkCancellation()
+      _ = try await _aem(targetEntityID, .registerUnsolicitedNotification(flags: []))
+      return false
+    }
   }
 
   private func _deregisterUnsolicitedNotifications(_ targetEntityID: UniqueIdentifier) async throws {
@@ -670,9 +690,13 @@ public actor Controller<Port: NetworkPort> {
     _ = try await _aem(targetEntityID, .deregisterUnsolicitedNotification)
   }
 
-  /// Forgets the registration with an entity, cancelling any renewal in progress.
+  /// Forgets the registration with an entity, cancelling its registration or renewal in
+  /// progress.
   private func _dropUnsolicitedNotificationRegistration(_ targetEntityID: UniqueIdentifier) {
-    _unsolicitedNotificationRegistrations.removeValue(forKey: targetEntityID)?.renewal?.cancel()
+    guard let registration = _unsolicitedNotificationRegistrations.removeValue(forKey: targetEntityID)
+    else { return }
+    registration.registering?.cancel()
+    registration.renewal?.cancel()
   }
 
   private func _renewUnsolicitedNotificationRegistrations() {
@@ -736,6 +760,7 @@ public actor Controller<Port: NetworkPort> {
     let registrations = _unsolicitedNotificationRegistrations
     _unsolicitedNotificationRegistrations = [:]
     for (targetEntityID, registration) in registrations {
+      registration.registering?.cancel()
       registration.renewal?.cancel()
       guard let macAddress = _discovery.entity(id: targetEntityID)?.macAddress else { continue }
       let sequenceID = _aecpSequenceID
