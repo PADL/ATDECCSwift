@@ -42,6 +42,13 @@ public protocol NetworkPort: Sendable {
   /// `handler` for each, until the task is cancelled or the port fails.
   func receive(_ handler: (IEEE802Packet) async -> ()) async throws
 
+  /// As `receive(_:)`, calling `onReady` once frames that reach the port from then on will be
+  /// received: a controller discovers entities then, so that their answers are not missed.
+  func receive(
+    onReady: () async -> (),
+    _ handler: (IEEE802Packet) async -> ()
+  ) async throws
+
   /// Calls `handler` with whether the port's link is up (linkIsUp, IEEE 1722.1-2021
   /// §6.2.7.1.5): first with its current state, then whenever it changes, until the task is
   /// cancelled or monitoring fails.
@@ -50,6 +57,15 @@ public protocol NetworkPort: Sendable {
 
 public extension NetworkPort {
   var maximumInflightAecpCommands: Int { 10 }
+
+  /// A port that is ready to receive as soon as it exists.
+  func receive(
+    onReady: () async -> (),
+    _ handler: (IEEE802Packet) async -> ()
+  ) async throws {
+    await onReady()
+    try await receive(handler)
+  }
 
   /// A port without link state, such as a point-to-point serial link, is always up.
   func monitorLinkState(_ handler: (Bool) async -> ()) async throws {
@@ -99,15 +115,23 @@ public struct EthernetPort: NetworkPort {
     try await _resolution.port.withLock { $0 }.send(packet)
   }
 
+  public func receive(_ handler: (IEEE802Packet) async -> ()) async throws {
+    try await receive(onReady: {}, handler)
+  }
+
   /// Each reception resolves the interface again: one that is removed and added again, as a
   /// USB adapter or a virtual interface can be, has a new index.
-  public func receive(_ handler: (IEEE802Packet) async -> ()) async throws {
+  public func receive(
+    onReady: () async -> (),
+    _ handler: (IEEE802Packet) async -> ()
+  ) async throws {
     let port = try RawEthernetPort(name: interfaceName)
     _resolution.port.withLock { $0 = port }
     let packets = try await port.receivePackets(
       etherTypes: [AvtpEtherType],
       groupAddresses: [AvdeccMulticastMacAddress, AvdeccIdentifyMulticastMacAddress]
     )
+    await onReady()
     for try await packet in packets {
       await handler(packet)
     }
@@ -466,6 +490,13 @@ public final class VirtualPort: NetworkPort {
   }
 
   public func receive(_ handler: (IEEE802Packet) async -> ()) async throws {
+    try await receive(onReady: {}, handler)
+  }
+
+  public func receive(
+    onReady: () async -> (),
+    _ handler: (IEEE802Packet) async -> ()
+  ) async throws {
     let (packets, receiver) = AsyncThrowingStream<IEEE802Packet, any Error>
       .makeStream(bufferingPolicy: .unbounded)
     let id: Int? = try _state.withLock { state in
@@ -492,6 +523,7 @@ public final class VirtualPort: NetworkPort {
     defer {
       _ = _state.withLock { $0.receivers.removeValue(forKey: id) }
     }
+    await onReady()
     for try await packet in packets where packet.etherType == AvtpEtherType {
       await handler(packet)
     }

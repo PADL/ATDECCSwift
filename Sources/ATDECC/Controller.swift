@@ -274,7 +274,8 @@ public actor Controller<Port: NetworkPort> {
   private var _isClosed = false
 
   /// Creates a controller entity with `entityID` on `endStation`, and sends ENTITY_DISCOVER
-  /// to find the entities already on the network.
+  /// to find the entities already on the network, as it does whenever the end station begins
+  /// receiving, such as when its link comes up.
   /// A controller of Milan entities only should use `.milan` ACMP timeouts, so that a listener
   /// that does not answer is reported in 400 ms rather than 9 s.
   public init(
@@ -338,12 +339,9 @@ public actor Controller<Port: NetworkPort> {
         }
       }
     }
-    do {
-      try await discoverRemoteEntities()
-    } catch {
-      _transmissions.finish()
-      await endStation.unregister(entityID)
-      throw error
+    // otherwise once the end station receives, when the entities' answers can be heard
+    if await endStation.isReceiving {
+      _discover(entityID: UniqueIdentifier())
     }
     _maintenanceTask = Task { [weak self, timing] in
       while !Task.isCancelled {
@@ -454,12 +452,14 @@ public actor Controller<Port: NetworkPort> {
 
   /// Sends ENTITY_DISCOVER for every entity (IEEE 1722.1-2021 §6.2.6).
   public func discoverRemoteEntities() async throws {
-    try await _discover(entityID: UniqueIdentifier())
+    guard !_isClosed else { throw EndStationError.closed }
+    _discover(entityID: UniqueIdentifier())
   }
 
   /// Sends ENTITY_DISCOVER for a single entity.
   public func discoverRemoteEntity(id: UniqueIdentifier) async throws {
-    try await _discover(entityID: id)
+    guard !_isClosed else { throw EndStationError.closed }
+    _discover(entityID: id)
   }
 
   /// Sends ENTITY_DISCOVER periodically, or never (the default) if `delay` is nil or zero.
@@ -468,12 +468,19 @@ public actor Controller<Port: NetworkPort> {
     _lastDiscovery = .now
   }
 
-  private func _discover(entityID: UniqueIdentifier) async throws {
+  /// Queued for the transmit task like any PDU, so that a slow port holds up neither the
+  /// caller nor discovery maintenance.
+  private func _discover(entityID: UniqueIdentifier) {
     _lastDiscovery = .now
-    try await endStation.send(
+    _transmissions.yield(.pdu(
       .adp(Adpdu(messageType: .entityDiscover, validTime: 0, entityID: entityID)),
-      to: AvdeccMulticastMacAddress
-    )
+      destination: AvdeccMulticastMacAddress
+    ))
+  }
+
+  func _handleReceptionBegan() {
+    guard !_isClosed else { return }
+    _discover(entityID: UniqueIdentifier())
   }
 
   private func _apply(_ events: [DiscoveryEvent]) {
@@ -495,17 +502,13 @@ public actor Controller<Port: NetworkPort> {
     }
   }
 
-  private func _maintainDiscovery() async {
+  private func _maintainDiscovery() {
     guard !_isClosed else { return }
     _apply(_discovery.expire())
     _renewUnsolicitedNotificationRegistrations()
     guard let delay = _automaticDiscoveryDelay, ContinuousClock.now - _lastDiscovery >= delay
     else { return }
-    do {
-      try await discoverRemoteEntities()
-    } catch {
-      _logger.debug("\(entityID): automatic discovery failed: \(error)")
-    }
+    _discover(entityID: UniqueIdentifier())
   }
 
   func _handle(_ adpdu: Adpdu, from sourceMacAddress: EUI48) {
