@@ -326,6 +326,19 @@ private func result<Success: Sendable>(
 
 private struct ReceiveFailure: Error {}
 
+/// A port that has gone: it sends nowhere, and every reception fails at once.
+private final class FailedPort: NetworkPort {
+  let macAddress = controllerMacAddress
+  let receptions = Mutex(0)
+
+  func send(_: IEEE802Packet) async throws {}
+
+  func receive(_: (IEEE802Packet) async -> ()) async throws {
+    receptions.withLock { $0 += 1 }
+    throw ReceiveFailure()
+  }
+}
+
 private func isCommand(_ commandType: AemCommandType) -> @Sendable (AvdeccPdu) -> Bool {
   { pdu in
     if case let .aecp(.aem(aem)) = pdu { !aem.isResponse && aem.commandType == commandType } else { false }
@@ -1032,6 +1045,29 @@ final class ControllerTests: XCTestCase {
     let descriptor = try await controller.readEntityDescriptor(id: entityID)
     XCTAssertEqual(descriptor.entityID, entityID)
     await controller.close()
+  }
+
+  /// A port that keeps failing is tried again ever less often, and reported once.
+  func testRepeatedReceiveFailureBacksOff() async throws {
+    let port = FailedPort()
+    let endStation = EndStation(port: port, logger: Logger(label: "ControllerTests"))
+    let controller = try await Controller(endStation: endStation, entityID: controllerEntityID)
+    let events = await controller.events()
+    let transportErrors = Mutex(0)
+    let counting = Task {
+      for await event in events {
+        if case .transportError = event { transportErrors.withLock { $0 += 1 } }
+      }
+    }
+    defer { counting.cancel() }
+
+    // retried after 100, 200 and 400 ms
+    try await Task.sleep(for: .milliseconds(500))
+    XCTAssertGreaterThanOrEqual(port.receptions.withLock { $0 }, 2)
+    XCTAssertLessThanOrEqual(port.receptions.withLock { $0 }, 4)
+    XCTAssertEqual(transportErrors.withLock { $0 }, 1)
+    await controller.close()
+    await endStation.close()
   }
 
   func testReceivesOnlyWhileLinkIsUp() async throws {
