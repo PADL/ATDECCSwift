@@ -141,6 +141,19 @@ public struct PtpScaledNanoseconds: Sendable, Hashable {
   }
 }
 
+/// An IEEE 802.1AS-2020 TimeInterval: a signed 64-bit count of 2^-16 nanoseconds.
+public struct PtpTimeInterval: Sendable, Hashable {
+  public let scaledNanoseconds: Int64
+
+  public init(scaledNanoseconds: Int64) {
+    self.scaledNanoseconds = scaledNanoseconds
+  }
+
+  public var nanoseconds: Double {
+    Double(scaledNanoseconds) / 65536
+  }
+}
+
 /// Which optional GET_PTP_INSTANCE_EXTENDED_INFO fields hold values (IEEE 1722.1-2021 Table 7-166).
 public struct PtpInstanceExtendedInfoValidFlags: OptionSet, Sendable, Hashable {
   public let rawValue: UInt16
@@ -155,8 +168,9 @@ public struct PtpInstanceExtendedInfoValidFlags: OptionSet, Sendable, Hashable {
   public static let timeOfLastGmFreqChange = PtpInstanceExtendedInfoValidFlags(rawValue: 1 << 6)
 }
 
-/// GET_PTP_INSTANCE_EXTENDED_INFO (IEEE 1722.1-2021 Figure 7-103), which gives
-/// last_gm_freq_change 4 octets, kept here as received.
+/// GET_PTP_INSTANCE_EXTENDED_INFO (IEEE 1722.1-2021 Figure 7-103), whose offset_from_master,
+/// last_gm_phase_change and last_gm_freq_change are the IEEE 802.1AS-2020 TimeInterval,
+/// ScaledNs and Float64 of currentDS and parentDS.
 public struct PtpInstanceExtendedInfo: Sendable, Hashable {
   public let info: PtpInstanceInfo
   public let parentClockIdentity: UniqueIdentifier
@@ -165,9 +179,9 @@ public struct PtpInstanceExtendedInfo: Sendable, Hashable {
   public let cumulativeRateRatio: Int32
   public let valid: PtpInstanceExtendedInfoValidFlags
   public let gmTimebaseIndicator: UInt16
-  public let offsetFromMaster: PtpScaledNanoseconds
+  public let offsetFromMaster: PtpTimeInterval
   public let lastGmPhaseChange: PtpScaledNanoseconds
-  public let lastGmFreqChange: UInt32
+  public let lastGmFreqChange: Double
   public let gmChangeCount: UInt32
   public let timeOfLastGmChange: UInt32
   public let timeOfLastGmPhaseChange: UInt32
@@ -451,9 +465,9 @@ extension PtpInstanceExtendedInfo {
     cumulativeRateRatio = try Int32(bitPattern: UInt32(parsingBigEndian: &input))
     valid = try PtpInstanceExtendedInfoValidFlags(rawValue: UInt16(parsingBigEndian: &input))
     gmTimebaseIndicator = try UInt16(parsingBigEndian: &input)
-    offsetFromMaster = try PtpScaledNanoseconds(parsing: &input)
+    offsetFromMaster = try PtpTimeInterval(scaledNanoseconds: Int64(bitPattern: UInt64(parsingBigEndian: &input)))
     lastGmPhaseChange = try PtpScaledNanoseconds(parsing: &input)
-    lastGmFreqChange = try UInt32(parsingBigEndian: &input)
+    lastGmFreqChange = try Double(bitPattern: UInt64(parsingBigEndian: &input))
     gmChangeCount = try UInt32(parsingBigEndian: &input)
     timeOfLastGmChange = try UInt32(parsingBigEndian: &input)
     timeOfLastGmPhaseChange = try UInt32(parsingBigEndian: &input)
