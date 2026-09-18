@@ -394,7 +394,8 @@ final class PayloadTests: XCTestCase {
     ))
   }
 
-  // Figure 7-92: three backup talkers and the backed up talker, each Entity ID and unique ID
+  // Figure 7-92: three backup talkers and the backed up talker, each Entity ID, unique ID and
+  // a reserved word
   func testStreamBackupSamplingRateRangeAndPathLatencyPayloads() throws {
     let backup = StreamBackup(
       backupTalker0: StreamIdentification(entityID: UniqueIdentifier(1), streamIndex: 2),
@@ -404,8 +405,13 @@ final class PayloadTests: XCTestCase {
     )
     let setBackup = AemCommandPayload.setStreamBackup(descriptorType: .streamInput, descriptorIndex: 1, backup: backup)
     let bytes = try setBackup.serialized()
-    XCTAssertEqual(bytes.count, 44)
-    XCTAssertEqual(Array(bytes[4..<14]), be64(1) + be16(2))
+    let expected = be16(DescriptorType.streamInput.rawValue) + be16(1)
+      + be64(1) + be16(2) + be16(0)
+      + be64(3) + be16(4) + be16(0)
+      + be64(0) + be16(0) + be16(0)
+      + be64(5) + be16(6) + be16(0)
+    XCTAssertEqual(expected.count, 52)
+    XCTAssertEqual(bytes, expected)
     XCTAssertEqual(try AemCommandPayload(commandTypeRaw: setBackup.commandTypeRaw, data: bytes), setBackup)
     guard case let .getStreamBackup(_, _, parsed) =
       try AemResponsePayload(commandTypeRaw: AemCommandType.getStreamBackup.rawValue, data: bytes)
