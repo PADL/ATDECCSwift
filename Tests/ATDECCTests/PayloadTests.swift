@@ -573,10 +573,11 @@ final class PayloadTests: XCTestCase {
     XCTAssertEqual(info.grandmaster.timeSource, 0x20)
     XCTAssertEqual(info.grandmaster.timeProperties, [.currentUtcOffsetValid, .ptpTimescale])
 
-    // parent, cumulative_rate_ratio, valid_flags, gm_timebase_indicator, two ScaledNs, five quadlets
+    // Figure 7-103: parent, cumulative_rate_ratio, valid_flags, gm_timebase_indicator, then an
+    // 8-octet TimeInterval, a 12-octet ScaledNs, an 8-octet Float64 and four quadlets
     let extended = body + be64(0x0011_22FF_FE66_7788) + be16(1) + be16(2) + be32(UInt32(bitPattern: -5)) +
-      be16(0x0001) + be16(3) + be32(0xFFFF_FFFF) + be64(0xFFFF_FFFF_FFFF_0000) + [UInt8](repeating: 0, count: 12) +
-      be32(7) + be32(8) + be32(9) + be32(10) + be32(11)
+      be16(0x0001) + be16(3) + be64(0xFFFF_FFFF_FFFF_0000) + be32(0) + be64(0x0002_8000) +
+      be64((1.5).bitPattern) + be32(8) + be32(9) + be32(10) + be32(11)
     XCTAssertEqual(extended.count, 96) // 100 octets with descriptor_type and descriptor_index
     guard case let .getPtpInstanceExtendedInfo(_, _, extendedInfo) = try AemResponsePayload(
       commandTypeRaw: AemCommandType.getPtpInstanceExtendedInfo.rawValue,
@@ -587,7 +588,9 @@ final class PayloadTests: XCTestCase {
     XCTAssertEqual(extendedInfo.cumulativeRateRatio, -5)
     XCTAssertEqual(extendedInfo.valid, .offsetFromMaster)
     XCTAssertEqual(extendedInfo.offsetFromMaster.nanoseconds, -1)
-    XCTAssertEqual(extendedInfo.lastGmFreqChange, 7)
+    XCTAssertEqual(extendedInfo.lastGmPhaseChange.nanoseconds, 2.5)
+    XCTAssertEqual(extendedInfo.lastGmFreqChange, 1.5)
+    XCTAssertEqual(extendedInfo.gmChangeCount, 8)
     XCTAssertEqual(extendedInfo.timeOfLastGmFreqChange, 11)
     XCTAssertThrowsError(try AemResponsePayload(
       commandTypeRaw: AemCommandType.getPtpInstanceExtendedInfo.rawValue,
