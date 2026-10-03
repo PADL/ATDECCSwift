@@ -23,7 +23,7 @@
 /// `registerUnsolicitedNotifications(id:)` when another controller or the entity itself
 /// changes its state (IEEE 1722.1-2021 §7.5.2). Sniffed ACMP responses are those exchanged
 /// between other controllers, talkers and listeners (IEEE 1722.1-2021 §8.2).
-public enum ControllerEvent: Sendable {
+public enum ControllerEvent: Sendable, Equatable {
   case transportError
   /// Entities advertising GENERAL_CONTROLLER_IGNORE (IEEE 1722.1-2021 Table 6-2) are
   /// reported too; a general-purpose controller should not present them.
