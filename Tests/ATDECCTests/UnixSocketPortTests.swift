@@ -281,8 +281,19 @@ final class UnixSocketPortTests: XCTestCase {
     XCTAssertThrowsError(try UnixSocketPort(fileDescriptor: fileDescriptors[0]))
   }
 
-  func testRejectsAPathTooLong() {
+  func testRejectsAnUnconnectedSocket() throws {
+    let fileDescriptor = socket(AF_UNIX, datagramSocketType, 0)
+    XCTAssertGreaterThanOrEqual(fileDescriptor, 0)
+    // the port closes the descriptor it rejects
+    XCTAssertThrowsError(try UnixSocketPort(fileDescriptor: fileDescriptor)) {
+      XCTAssertEqual($0 as? Errno, .socketNotConnected)
+    }
+  }
+
+  func testRejectsUnusablePaths() {
     XCTAssertThrowsError(try UnixSocketPort(path: "/" + String(repeating: "x", count: 200)))
+    XCTAssertThrowsError(try UnixSocketPort(path: ""))
+    XCTAssertThrowsError(try UnixSocketPort(path: "\0abstract"))
   }
 
   /// The port binds an address, so that an entity that receives with recvfrom can reply with

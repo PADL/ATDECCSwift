@@ -154,13 +154,18 @@ AVDECC multicast address.
 the entity's path. The entity binds the path, receives with `recvfrom`, and replies to each
 controller with `sendto` to the address its datagrams came from, sending its advertisements
 and other multicast frames to every controller it has heard from and forgetting one when a
-send to it fails. A datagram socket has no end of stream, so an entity that goes away is
-noticed when a send fails; the port then connects to the path again on each send, reaching
-the entity once it is back, and the entity goes offline meanwhile when its advertisements
-stop. As an entity learns of a controller only from its datagrams, a controller that should
-find a restarted entity sets an automatic discovery delay. `UnixSocketPort(fileDescriptor:)`
-takes a connected datagram socket instead, such as one end of a `socketpair`, and does not
-reconnect.
+send to it fails with `EPERM`, `ECONNREFUSED` or `ENOENT`. A datagram socket has no end of
+stream, so an entity that goes away is noticed when a send fails; the port then connects to
+the path again on each send, reaching the entity once it is back, and the entity goes offline
+meanwhile when its advertisements stop.
+
+An entity learns of a controller only from its datagrams, and a restarted entity cannot reach
+a controller at all until the controller sends again: the controller's socket is still
+connected to the entity's old socket, so the entity's `sendto` fails with `EPERM`. A
+controller that should find a restarted entity must therefore set an automatic discovery
+delay. The path must be a filesystem path: abstract names (beginning with a zero byte) are not
+supported. `UnixSocketPort(fileDescriptor:)` takes a connected datagram socket instead, such
+as one end of a `socketpair`, and does not reconnect.
 
 ```sh
 .build/debug/avdecc-discovery unix:/run/mediabridge/atdecc.sock
