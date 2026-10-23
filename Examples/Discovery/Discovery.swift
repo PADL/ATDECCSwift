@@ -22,8 +22,9 @@ import Glibc
 import Darwin
 #endif
 
-/// Discovers ATDECC entities on an Ethernet interface, or on a serial device given as
-/// `path[@baud]`, and prints each one's ENTITY descriptor.
+/// Discovers ATDECC entities on an Ethernet interface, on a serial device given as
+/// `path[@baud]`, or on a Unix domain socket given as `unix:path`, and prints each one's
+/// ENTITY descriptor.
 @main
 enum Discovery {
   static func main() async throws {
@@ -34,14 +35,17 @@ enum Discovery {
     }
 
     guard CommandLine.arguments.count == 2 else {
-      print("Usage: \(CommandLine.arguments[0]) interface|/dev/tty[@baud]")
+      print("Usage: \(CommandLine.arguments[0]) interface|/dev/tty[@baud]|unix:path")
       exit(1)
     }
 
     #if os(Linux)
     let name = CommandLine.arguments[1]
     do {
-      if name.hasPrefix("/") {
+      if name.hasPrefix("unix:") {
+        let path = String(name.dropFirst("unix:".count))
+        try await discover(on: open(name) { try UnixSocketPort(path: path) })
+      } else if name.hasPrefix("/") {
         let components = name.split(separator: "@", maxSplits: 1)
         guard let baudRate = components.count == 2 ? Int(components[1]) : 115_200 else {
           print("invalid baud rate in \(name)")
@@ -56,7 +60,7 @@ enum Discovery {
       exit(2)
     }
     #else
-    print("the Ethernet and serial ports are only available on Linux")
+    print("the Ethernet, serial and Unix domain socket ports are only available on Linux")
     exit(1)
     #endif
   }
