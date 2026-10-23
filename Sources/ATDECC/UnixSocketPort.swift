@@ -174,12 +174,12 @@ public final class UnixSocketPort: NetworkPort {
 
 /// The port's socket and its connection to the entity. Sends are made by the link's one writer
 /// task, so the socket is connected again by one task at a time; reads by the one task
-/// receiving, whose read in progress `close()` cancels.
+/// receiving, whose read in progress `close()` ends by shutting the socket down for reading.
 private final class _DatagramSocket: Sendable {
   private let _socket: Socket
   private let _address: sockaddr_un?
   private let _isConnected = Atomic(false)
-  private let _reading = Mutex<(isClosed: Bool, read: Task<[UInt8], any Error>?)>((false, nil))
+  private let _isClosed = Atomic(false)
 
   init(socket: Socket, address: sockaddr_un?) {
     _socket = socket
@@ -218,33 +218,22 @@ private final class _DatagramSocket: Sendable {
 
   /// One datagram, cut to `count` octets, or EBADF once the socket is closed.
   func read(count: Int) async throws -> [UInt8] {
-    let read = try _reading.withLock { reading in
-      guard !reading.isClosed else { throw Errno.badFileDescriptor }
-      let socket = _socket
-      let read = Task {
-        try Task.checkCancellation()
-        return try await socket.receive(count: count, timeout: nil)
-      }
-      reading.read = read
-      return read
-    }
+    guard !_isClosed.load(ordering: .acquiring) else { throw Errno.badFileDescriptor }
     do {
-      return try await withTaskCancellationHandler {
-        try await read.value
-      } onCancel: {
-        read.cancel()
-      }
+      let datagram = try await _socket.receive(count: count, timeout: nil)
+      // a socket shut down for reading reads as empty
+      guard !_isClosed.load(ordering: .acquiring) else { throw Errno.badFileDescriptor }
+      return datagram
     } catch {
-      guard !_reading.withLock({ $0.isClosed }) else { throw Errno.badFileDescriptor }
+      guard !_isClosed.load(ordering: .acquiring) else { throw Errno.badFileDescriptor }
       throw error
     }
   }
 
+  /// Shuts the socket down for reading, which ends a read in progress, and any made after.
   func close() {
-    _reading.withLock { reading in
-      reading.isClosed = true
-      return reading.read
-    }?.cancel()
+    _isClosed.store(true, ordering: .releasing)
+    try? _socket.shutdown(.read)
   }
 }
 
