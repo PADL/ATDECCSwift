@@ -47,8 +47,12 @@ public let UnixSocketPortPeerMacAddress: EUI48 = [0x0A, 0xE9, 0x1B, 0xFF, 0xFF, 
 /// stream: an entity that goes away is noticed when a send fails, and the port then connects
 /// to the path again, once per send, so that a restarted entity is reached; until it is, sends
 /// fail with ECONNREFUSED or ENOENT, and the entity goes offline when its advertisements stop.
-/// An entity learns of a controller only from datagrams it receives, so a controller that
-/// should find an entity that restarts sets an automatic discovery delay.
+///
+/// An entity learns of a controller only from datagrams it receives, and a restarted entity
+/// cannot reach a controller at all until the controller sends again (its `sendto` fails with
+/// EPERM, as the controller's socket is still connected to the entity's old one): a controller
+/// that should find an entity that restarts sets an automatic discovery delay. An entity
+/// forgets a controller when a send to it fails with EPERM, ECONNREFUSED or ENOENT.
 public final class UnixSocketPort: NetworkPort {
   /// The path of the entity's socket, if the port was opened with one.
   public let path: String?
@@ -59,8 +63,9 @@ public final class UnixSocketPort: NetworkPort {
   private let _socket: _DatagramSocket
   private let _link: PointToPointLink
 
-  /// Connects to the entity's socket at `path`. The port is opened, and the entity reached
-  /// once it is listening, even if it is not yet: sends fail until then.
+  /// Connects to the entity's socket at `path`, a filesystem path; abstract names (beginning
+  /// with a zero byte) are not supported. The port is opened, and the entity reached once it
+  /// is listening, even if it is not yet: sends fail until then.
   public convenience init(
     path: String,
     macAddress: EUI48 = UnixSocketPortLocalMacAddress,
@@ -88,7 +93,7 @@ public final class UnixSocketPort: NetworkPort {
   }
 
   /// Uses `fileDescriptor`, a connected AF_UNIX datagram socket, such as one end of a
-  /// `socketpair` or a socket passed by a service manager. The port owns the descriptor,
+  /// `socketpair`; an unconnected socket fails with ENOTCONN. The port owns the descriptor,
   /// closing it when released, or if it cannot be used. It does not connect the socket again
   /// if the peer goes away.
   public convenience init(
@@ -111,6 +116,7 @@ public final class UnixSocketPort: NetworkPort {
     else {
       throw Errno.protocolWrongTypeForSocket
     }
+    _ = try socket.peerAddress
 
     self.init(
       socket: _DatagramSocket(socket: socket, address: nil),
@@ -244,8 +250,10 @@ private final class _DatagramSocket: Sendable {
 
 /// A `sockaddr_un` naming `path`, a filesystem path.
 private func _unixSocketAddress(path: String) throws -> sockaddr_un {
+  // an abstract name begins with a zero byte, and its length is part of the address
+  guard let first = path.utf8.first, first != 0 else { throw Errno.invalidArgument }
   // a path the length of sun_path would lack its terminating zero
-  guard !path.isEmpty, path.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path) else {
+  guard path.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path) else {
     throw Errno.fileNameTooLong
   }
   return try sockaddr_un(family: sa_family_t(AF_UNIX), presentationAddress: path)
