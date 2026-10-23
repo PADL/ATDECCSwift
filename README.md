@@ -59,8 +59,9 @@ The names follow IEEE 1722.1-2021:
 
 - **`NetworkPort`** — a protocol for the link AVTP frames travel on. `EthernetPort` joins the
   AVDECC multicast groups (rather than going promiscuous, so it works behind bridges that
-  filter multicast in hardware); `SerialPort` reaches a single entity over a UART; and
-  `VirtualPort` connects ports on an in-memory `VirtualNetwork` for tests and simulation.
+  filter multicast in hardware); `SerialPort` reaches a single entity over a UART;
+  `UnixSocketPort` reaches a single entity on the same host over an `AF_UNIX` datagram socket;
+  and `VirtualPort` connects ports on an in-memory `VirtualNetwork` for tests and simulation.
 - **`EndStation<Port>`** — an ATDECC End Station: owns a port, dispatches received PDUs to
   its entities, and issues dynamic entity IDs.
 - **`Controller<Port>`** — an ATDECC Controller entity. It runs a Discovery state machine,
@@ -108,7 +109,7 @@ swift test
 ```
 
 The tests run controllers against a simulated entity on a `VirtualNetwork` and need no network
-access or privileges. The serial port tests use a pseudo-terminal and io_uring, which Docker's
+access or privileges. The serial and Unix domain socket port tests use a pseudo-terminal and io_uring, which Docker's
 default seccomp profile blocks: run a container with `--security-opt seccomp=unconfined`.
 
 Sending and receiving raw Ethernet needs `CAP_NET_RAW`. Either run as root, or grant the
@@ -133,6 +134,36 @@ all multicast frames, to its UART.
 
 ```sh
 .build/debug/avdecc-discovery /dev/ttyAMA0@115200
+```
+
+## Unix domain sockets
+
+`UnixSocketPort` carries ATDECC to an entity on the same host over an `AF_UNIX` `SOCK_DGRAM`
+socket, as la_avdecc's local protocol interface does. Each datagram is one AVTPDU (the AVTP
+control header and its ADP, AECP or ACMP data, with no Ethernet header, padding or COBS
+encoding) of at most 1500 octets; longer datagrams, and those too short for a control header,
+are discarded.
+
+As on a serial link, the wire carries no addresses: every frame goes to the one peer, and
+received frames appear to come from `UnixSocketPortPeerMacAddress` (`0A:E9:1B:FF:FF:FF`), so a
+controller can pair with the entity without waiting to learn its address. AECP frames are
+given the destination `UnixSocketPortLocalMacAddress` (`0A:E9:1B:01:01:01`), ADP and ACMP the
+AVDECC multicast address.
+
+`UnixSocketPort(path:)` binds its socket to an autobound abstract address and connects it to
+the entity's path. The entity binds the path, receives with `recvfrom`, and replies to each
+controller with `sendto` to the address its datagrams came from, sending its advertisements
+and other multicast frames to every controller it has heard from and forgetting one when a
+send to it fails. A datagram socket has no end of stream, so an entity that goes away is
+noticed when a send fails; the port then connects to the path again on each send, reaching
+the entity once it is back, and the entity goes offline meanwhile when its advertisements
+stop. As an entity learns of a controller only from its datagrams, a controller that should
+find a restarted entity sets an automatic discovery delay. `UnixSocketPort(fileDescriptor:)`
+takes a connected datagram socket instead, such as one end of a `socketpair`, and does not
+reconnect.
+
+```sh
+.build/debug/avdecc-discovery unix:/run/mediabridge/atdecc.sock
 ```
 
 ## License
