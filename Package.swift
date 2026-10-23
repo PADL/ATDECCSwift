@@ -44,6 +44,7 @@ let package = Package(
         .product(name: "NetLink", package: "NetLinkSwift", condition: .when(platforms: [.linux])),
         // NETLINK_ROUTE
         .product(name: "CLinuxSockAddr", package: "SocketAddress", condition: .when(platforms: [.linux])),
+        .product(name: "SocketAddress", package: "SocketAddress", condition: .when(platforms: [.linux])),
         .product(name: "SystemPackage", package: "swift-system", condition: .when(platforms: [.linux])),
         .product(name: "BinaryParsing", package: "swift-binary-parsing"),
         .product(name: "Logging", package: "swift-log"),

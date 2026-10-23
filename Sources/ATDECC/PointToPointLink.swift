@@ -84,9 +84,8 @@ final class PointToPointLink: Sendable {
     }
   }
 
-  let fileHandle: FileHandle
   private let _framing: Framing
-  private let _ring: IORing
+  private let _read: @Sendable (Int) async throws -> [UInt8]
   // frames are written by one task so that concurrent sends, and short writes, never interleave
   private let _transmissions: AsyncStream<Transmission>.Continuation
   private let _isClosed = Atomic(false)
@@ -94,15 +93,26 @@ final class PointToPointLink: Sendable {
   /// Receives frames on `fileHandle`, and sends them with `write`, which is given each frame
   /// as it is to be written (COBS encoded and delimited, or a bare AVTPDU) in turn. The link
   /// holds `fileHandle` open until it and the requests in flight on it are released.
-  init(
+  convenience init(
     fileHandle: FileHandle,
     framing: Framing,
     ring: IORing,
     write: @escaping @Sendable ([UInt8]) async throws -> ()
   ) {
-    self.fileHandle = fileHandle
+    self.init(framing: framing, read: { count in
+      try await ring.read(count: count, from: fileHandle)
+    }, write: write)
+  }
+
+  /// Receives frames with `read`, which is given the most it is to return, as `IORing.read`
+  /// is, and sends them with `write`, as `init(fileHandle:framing:ring:write:)` does.
+  init(
+    framing: Framing,
+    read: @escaping @Sendable (Int) async throws -> [UInt8],
+    write: @escaping @Sendable ([UInt8]) async throws -> ()
+  ) {
     _framing = framing
-    _ring = ring
+    _read = read
 
     let (transmissions, continuation) = AsyncStream<Transmission>.makeStream()
     _transmissions = continuation
@@ -164,7 +174,7 @@ final class PointToPointLink: Sendable {
       guard !isClosed else { throw Errno(rawValue: EBADF) }
       let bytes: [UInt8]
       do {
-        bytes = try await _ring.read(count: readLength, from: fileHandle)
+        bytes = try await _read(readLength)
       } catch let error as Errno where error.isTransient {
         // read again, keeping the frame the decoder has part of
         await Task.yield()
