@@ -16,12 +16,10 @@
 
 #if os(Linux)
 
-import BinaryParsing
 import Glibc
 import IEEE802
 import IORing
 import IORingUtils
-import Synchronization
 import struct SystemPackage.Errno
 
 /// The address of the host end of a serial link. Frames carry no addresses on the wire; entity
@@ -31,10 +29,6 @@ public let SerialPortLocalMacAddress: EUI48 = [0x0A, 0xE9, 0x1B, 0x00, 0x00, 0x0
 /// The source address given to frames received on a serial link.
 public let SerialPortPeerMacAddress: EUI48 = [0x0A, 0xE9, 0x1B, 0xFF, 0xFF, 0xFF]
 
-// The largest AVTPDU carried on a serial link, as on Ethernet.
-private let _serialMaximumPayloadLength = 1500
-private let _serialReadLength = 256
-
 /// A point-to-point serial network port, for an entity reached over a UART rather than
 /// Ethernet. Each AVTPDU (the AVTP control header and ADP, AECP or ACMP data, without an
 /// Ethernet header or padding) is COBS encoded and delimited by zero bytes.
@@ -42,48 +36,6 @@ private let _serialReadLength = 256
 /// There is one peer, so every frame is sent to it whatever its destination address, and
 /// received frames appear to come from `peerMacAddress`.
 public final class SerialPort: NetworkPort {
-  /// A frame queued for the writer task. Cancelling its send stops it being written, or stops
-  /// the write in progress; the peer discards a frame cut short, as the next one begins with a
-  /// delimiter.
-  private final class Transmission: Sendable {
-    private enum State {
-      case queued
-      case writing(Task<(), any Error>)
-      case cancelled
-    }
-
-    let frame: [UInt8]
-    let promise = Promise<()>()
-    private let _state = Mutex(State.queued)
-
-    init(frame: [UInt8]) {
-      self.frame = frame
-    }
-
-    /// Starts writing the frame with `write`, unless its send has been cancelled.
-    func startWriting(
-      _ write: @escaping @Sendable ([UInt8]) async throws -> ()
-    ) -> Task<(), any Error>? {
-      _state.withLock { state in
-        guard case .queued = state else { return nil }
-        let frame = frame
-        let task = Task { try await write(frame) }
-        state = .writing(task)
-        return task
-      }
-    }
-
-    func cancel() {
-      promise.resolve(.failure(CancellationError()))
-      let write = _state.withLock { state -> Task<(), any Error>? in
-        defer { state = .cancelled }
-        guard case let .writing(task) = state else { return nil }
-        return task
-      }
-      write?.cancel()
-    }
-  }
-
   public let path: String
   public let macAddress: EUI48
   public let peerMacAddress: EUI48
@@ -92,10 +44,7 @@ public final class SerialPort: NetworkPort {
   public let maximumInflightAecpCommands: Int
 
   let _fileHandle: FileHandle
-  private let _ring: IORing
-  // frames are written by one task so that concurrent sends, and short writes, never interleave
-  private let _transmissions: AsyncStream<Transmission>.Continuation
-  private let _isClosed = Atomic(false)
+  private let _link: PointToPointLink
 
   /// Opens the serial device at `path`, configuring it for raw 8N1 at `baudRate` without
   /// hardware flow control.
@@ -137,17 +86,8 @@ public final class SerialPort: NetworkPort {
     self.peerMacAddress = peerMacAddress
     self.maximumInflightAecpCommands = max(maximumInflightAecpCommands, 1)
     _fileHandle = fileHandle
-    _ring = ring
-
-    let (transmissions, continuation) = AsyncStream<Transmission>.makeStream()
-    _transmissions = continuation
-    Task {
-      for await transmission in transmissions {
-        guard let write = transmission.startWriting({ frame in
-          try await _write(frame, to: fileHandle, ring: ring)
-        }) else { continue }
-        await transmission.promise.resolve(write.result)
-      }
+    _link = PointToPointLink(fileHandle: fileHandle, framing: .cobs, ring: ring) { frame in
+      try await _write(frame, to: fileHandle, ring: ring)
     }
   }
 
@@ -159,65 +99,18 @@ public final class SerialPort: NetworkPort {
   /// ends with its next read. Frames already queued are still written. The device itself stays
   /// open until the port is released, as requests in flight hold it.
   public func close() {
-    _isClosed.store(true, ordering: .relaxed)
-    _transmissions.finish()
+    _link.close()
   }
 
   /// Sends a frame once those queued before it are written. Cancelling the send abandons the
   /// frame, even part-way through writing it.
   public func send(_ packet: IEEE802Packet) async throws {
-    let transmission = try Transmission(frame: _encodeFrame(payload: packet.payload))
-    guard case .enqueued = _transmissions.yield(transmission) else {
-      throw Errno(rawValue: EBADF)
-    }
-    try await withTaskCancellationHandler {
-      try await transmission.promise.value
-    } onCancel: {
-      transmission.cancel()
-    }
+    try await _link.send(packet)
   }
 
   public func receive(_ handler: (IEEE802Packet) async -> ()) async throws {
-    var decoder = CobsFrameDecoder(maximumFrameLength: _serialMaximumPayloadLength)
-
-    while !Task.isCancelled {
-      guard !_isClosed.load(ordering: .relaxed) else { throw Errno(rawValue: EBADF) }
-      let bytes: [UInt8]
-      do {
-        bytes = try await _ring.read(count: _serialReadLength, from: _fileHandle)
-      } catch let error as Errno where error.isTransient {
-        // read again, keeping the frame the decoder has part of
-        await Task.yield()
-        continue
-      }
-      guard !bytes.isEmpty else { throw Errno(rawValue: EIO) }
-
-      for payload in decoder.decode(bytes) {
-        guard let header = try? payload.withParserSpan({
-          try AvtpduControlHeader(parsing: &$0)
-        }) else { continue }
-        let isMulticast = header.subtype == AvtpSubtype.adp.rawValue ||
-          header.subtype == AvtpSubtype.acmp.rawValue
-        await handler(IEEE802Packet(
-          destMacAddress: isMulticast ? AvdeccMulticastMacAddress : macAddress,
-          tci: nil,
-          sourceMacAddress: peerMacAddress,
-          etherType: AvtpEtherType,
-          payload: payload
-        ))
-      }
-    }
+    try await _link.receive(macAddress: macAddress, peerMacAddress: peerMacAddress, handler)
   }
-}
-
-// Removes any Ethernet padding, which the serial encoding does not carry.
-private func _encodeFrame(payload: [UInt8]) throws -> [UInt8] {
-  let header = try payload.withParserSpan { try AvtpduControlHeader(parsing: &$0) }
-  let length = AvtpduControlHeader.length + Int(header.controlDataLength)
-  guard length <= payload.count, length <= _serialMaximumPayloadLength else {
-    throw AvdeccCodecError.invalidControlDataLength(header.controlDataLength)
-  }
-  return [Cobs.delimiter] + Cobs.encode(Array(payload.prefix(length))) + [Cobs.delimiter]
 }
 
 private func _write(_ frame: [UInt8], to fileHandle: FileHandle, ring: IORing) async throws {
@@ -232,13 +125,6 @@ private func _write(_ frame: [UInt8], to fileHandle: FileHandle, ring: IORing) a
       // write the rest again: nothing of it was written
       await Task.yield()
     }
-  }
-}
-
-private extension Errno {
-  /// An interrupted system call, or one that would block, has done nothing and is made again.
-  var isTransient: Bool {
-    self == .interrupted || self == .resourceTemporarilyUnavailable || self == .wouldBlock
   }
 }
 
