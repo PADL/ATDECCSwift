@@ -44,16 +44,26 @@ public struct StreamConnectionState: Sendable, Hashable {
   /// The number of entries in a talker's connected listeners array, when the response carries
   /// it (CL_ENTRIES_VALID, IEEE 1722.1-2021 §8.2.1.18).
   public let connectedListenersEntries: UInt16?
+  /// The stream_id, stream_dest_mac and stream_vlan_id of the response (IEEE 1722.1-2021
+  /// §8.2.1.7, §8.2.1.12 and §8.2.1.16), zero where the responder leaves them so.
+  public let streamID: UniqueIdentifier
+  public let streamDestAddress: EUI48
+  public let streamVlanID: UInt16
 
   public init(
     talkerStream: StreamIdentification, listenerStream: StreamIdentification,
-    connectionCount: UInt16, flags: ConnectionFlags, connectedListenersEntries: UInt16? = nil
+    connectionCount: UInt16, flags: ConnectionFlags, connectedListenersEntries: UInt16? = nil,
+    streamID: UniqueIdentifier = UniqueIdentifier(), streamDestAddress: EUI48 = [0, 0, 0, 0, 0, 0],
+    streamVlanID: UInt16 = 0
   ) {
     self.talkerStream = talkerStream
     self.listenerStream = listenerStream
     self.connectionCount = connectionCount
     self.flags = flags
     self.connectedListenersEntries = connectedListenersEntries
+    self.streamID = streamID
+    self.streamDestAddress = streamDestAddress
+    self.streamVlanID = streamVlanID
   }
 
   init(_ acmpdu: Acmpdu) {
@@ -62,8 +72,34 @@ public struct StreamConnectionState: Sendable, Hashable {
       listenerStream: acmpdu.listenerStream,
       connectionCount: acmpdu.connectionCount,
       flags: acmpdu.flags,
-      connectedListenersEntries: acmpdu.flags.contains(.clEntriesValid) ? acmpdu.connectedListenersEntries : nil
+      connectedListenersEntries: acmpdu.flags.contains(.clEntriesValid) ? acmpdu.connectedListenersEntries : nil,
+      streamID: acmpdu.streamID,
+      streamDestAddress: acmpdu.streamDestAddress,
+      streamVlanID: acmpdu.streamVlanID
     )
+  }
+
+  // written out, as EUI48 (an InlineArray) is not Hashable
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.talkerStream == rhs.talkerStream &&
+      lhs.listenerStream == rhs.listenerStream &&
+      lhs.connectionCount == rhs.connectionCount &&
+      lhs.flags == rhs.flags &&
+      lhs.connectedListenersEntries == rhs.connectedListenersEntries &&
+      lhs.streamID == rhs.streamID &&
+      _isEqualMacAddress(lhs.streamDestAddress, rhs.streamDestAddress) &&
+      lhs.streamVlanID == rhs.streamVlanID
+  }
+
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(talkerStream)
+    hasher.combine(listenerStream)
+    hasher.combine(connectionCount)
+    hasher.combine(flags)
+    hasher.combine(connectedListenersEntries)
+    hasher.combine(streamID)
+    _hashMacAddress(streamDestAddress, into: &hasher)
+    hasher.combine(streamVlanID)
   }
 }
 

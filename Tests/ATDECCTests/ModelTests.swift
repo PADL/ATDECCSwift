@@ -74,6 +74,36 @@ final class ModelTests: XCTestCase {
     XCTAssertNil(StreamFormat(format: 0x0205_0220_0200_6000).crfBaseFrequency)
   }
 
+  func testFormatConstructors() {
+    let aaf = StreamFormat.aaf(
+      sampleRate: .fs48000, format: .int32Bit, bitDepth: 24, channelsPerFrame: 8, samplesPerFrame: 6
+    )
+    XCTAssertEqual(aaf.format, 0x0205_0218_0200_6000)
+    XCTAssertEqual(aaf.bitDepth, 24)
+    XCTAssertEqual(aaf.channelsPerFrame, 8)
+    XCTAssertEqual(aaf.samplesPerFrame, 6)
+    let pcm24 = StreamFormat.aaf(
+      sampleRate: .fs96000, format: .int24Bit, channelsPerFrame: 2, samplesPerFrame: 12, isUpToChannelsCount: true
+    )
+    XCTAssertEqual(pcm24.sampleRate, 96000)
+    XCTAssertEqual(pcm24.bitDepth, 24)
+    XCTAssertTrue(pcm24.isUpToChannelsCount)
+
+    XCTAssertEqual(StreamFormat.crf(baseFrequency: 48000).format, 0x0410_6001_0000_BB80)
+    let crf = StreamFormat.crf(timestampInterval: 160, timestampsPerPdu: 6, pull: 1, baseFrequency: 96000)
+    XCTAssertEqual(crf.crfTimestampInterval, 160)
+    XCTAssertEqual(crf.crfTimestampsPerPdu, 6)
+    XCTAssertEqual(crf.crfPull, 1)
+    XCTAssertEqual(crf.crfBaseFrequency, 96000)
+
+    let am824 = StreamFormat.iec61883_6AM824(sampleRate: 48000, channelsPerFrame: 8)
+    XCTAssertEqual(am824?.format, 0x00A0_0208_4000_0800)
+    XCTAssertEqual(am824?.channelsPerFrame, 8)
+    let upTo = StreamFormat.iec61883_6AM824(sampleRate: 96000, channelsPerFrame: 2, isUpToChannelsCount: true)
+    XCTAssertEqual(upTo?.isUpToChannelsCount, true)
+    XCTAssertNil(StreamFormat.iec61883_6AM824(sampleRate: 47000, channelsPerFrame: 2))
+  }
+
   func testAafReservedFormat() {
     // format is an octet: 0x11 and 0x12 are reserved, not FLOAT_32BIT and INT_32BIT
     let reservedFloat = StreamFormat(format: 0x0205_1120_0040_6000)
@@ -394,6 +424,33 @@ final class HashableConformanceTests: XCTestCase {
       ("gptpDomainNumber", { $0.gptpDomainNumber = nil }),
     ]
     assertEveryFieldIsCompared(interface, mutations)
+  }
+
+  func testStreamConnectionStateComparesEveryField() {
+    func state(
+      streamID: UInt64 = 1, streamDestAddress: EUI48 = [0x91, 0xE0, 0xF0, 0x00, 0x00, 0x02], streamVlanID: UInt16 = 3,
+      connectionCount: UInt16 = 4, flags: ConnectionFlags = [.classB], entries: UInt16? = 5
+    ) -> StreamConnectionState {
+      StreamConnectionState(
+        talkerStream: StreamIdentification(entityID: UniqueIdentifier(6), streamIndex: 7),
+        listenerStream: StreamIdentification(entityID: UniqueIdentifier(8), streamIndex: 9),
+        connectionCount: connectionCount,
+        flags: flags,
+        connectedListenersEntries: entries,
+        streamID: UniqueIdentifier(streamID),
+        streamDestAddress: streamDestAddress,
+        streamVlanID: streamVlanID
+      )
+    }
+    let mutations: [(String, (inout StreamConnectionState) -> ())] = [
+      ("streamID", { $0 = state(streamID: 0) }),
+      ("streamDestAddress", { $0 = state(streamDestAddress: [0x91, 0xE0, 0xF0, 0x00, 0x00, 0x00]) }),
+      ("streamVlanID", { $0 = state(streamVlanID: 0) }),
+      ("connectionCount", { $0 = state(connectionCount: 0) }),
+      ("flags", { $0 = state(flags: []) }),
+      ("connectedListenersEntries", { $0 = state(entries: nil) }),
+    ]
+    assertEveryFieldIsCompared(state(), mutations)
   }
 
   func testDescriptorCountersComparesEveryCounter() {

@@ -393,5 +393,62 @@ public struct StreamFormat: CustomStringConvertible, Equatable, Hashable, Sendab
     _format = format
   }
 
+  /// An AAF format (IEEE 1722-2016 §I.2.4). `bitDepth` defaults to every bit of `format`'s
+  /// samples; a floating-point format carries 32 (§7.3.4).
+  public static func aaf(
+    sampleRate: AafNominalSampleRate,
+    format: AafFormat,
+    bitDepth: Int? = nil,
+    channelsPerFrame: Int,
+    samplesPerFrame: Int,
+    isUpToChannelsCount: Bool = false
+  ) -> StreamFormat {
+    let depth = UInt64(bitDepth ?? format.bitDepth ?? 32) & 0xFF
+    return StreamFormat(format: UInt64(AvtpSubtype.aaf.rawValue) << 56 |
+      (isUpToChannelsCount ? 1 << 52 : 0) |
+      UInt64(sampleRate.rawValue) << 48 |
+      UInt64(format.rawValue) << 40 |
+      depth << 32 |
+      (UInt64(channelsPerFrame) & 0x3FF) << 22 |
+      (UInt64(samplesPerFrame) & 0x3FF) << 12)
+  }
+
+  /// A CRF format (IEEE 1722-2016 §I.2.6). The defaults are those of a Milan media clock
+  /// reference stream: an audio sample clock, one timestamp per PDU every 96 events.
+  public static func crf(
+    type: UInt8 = 1,
+    timestampInterval: UInt16 = 96,
+    timestampsPerPdu: UInt8 = 1,
+    pull: UInt8 = 0,
+    baseFrequency: UInt32
+  ) -> StreamFormat {
+    StreamFormat(format: UInt64(AvtpSubtype.crf.rawValue) << 56 |
+      UInt64(type & 0xF) << 52 |
+      UInt64(timestampInterval & 0xFFF) << 40 |
+      UInt64(timestampsPerPdu) << 32 |
+      UInt64(pull & 0x7) << 29 |
+      UInt64(baseFrequency & 0x1FFF_FFFF))
+  }
+
+  /// An IEC 61883-6 AM824 format (IEEE 1722-2016 §I.2.2) of `channelsPerFrame` multi-bit linear
+  /// audio labels, non-blocking, as AVB entities predating AAF advertise. nil for a sample rate
+  /// IEC 61883-6 has no SFC for.
+  public static func iec61883_6AM824(
+    sampleRate: Int,
+    channelsPerFrame: Int,
+    isUpToChannelsCount: Bool = false
+  ) -> StreamFormat? {
+    guard let sfc = [32000, 44100, 48000, 88200, 96000, 176_400, 192_000].firstIndex(of: sampleRate)
+    else { return nil }
+    let channels = UInt64(channelsPerFrame) & 0xFF
+    // sf = 1, fmt = 0x10; fdf is evt (AM824 = 0) and sfc; nb, and ut when requested
+    return StreamFormat(format: UInt64(AvtpSubtype.iec61883iidc.rawValue) << 56 |
+      0xA0 << 48 |
+      UInt64(sfc) << 40 |
+      channels << 32 |
+      (0x40 | (isUpToChannelsCount ? 0x20 : 0)) << 24 |
+      channels << 8)
+  }
+
   public var description: String { _format.paddedHex(width: 16) }
 }
