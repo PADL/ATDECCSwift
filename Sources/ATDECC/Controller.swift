@@ -2572,6 +2572,14 @@ public extension Controller {
     return (countersValid, counters)
   }
 
+  /// GET_COUNTERS (IEEE 1722.1-2021 §7.4.42) for any descriptor type: counters_valid, whose
+  /// bit `1 << n` marks `counters[n]` valid, and the counters.
+  func getCounters(
+    id targetEntityID: UniqueIdentifier, descriptorType: DescriptorType, descriptorIndex: DescriptorIndex
+  ) async throws -> (valid: UInt32, counters: DescriptorCounters) {
+    try await _getCounters(targetEntityID, descriptorType, descriptorIndex)
+  }
+
   func getEntityCounters(
     id targetEntityID: UniqueIdentifier
   ) async throws -> (valid: EntityCounterValidFlags, counters: DescriptorCounters) {

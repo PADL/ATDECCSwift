@@ -244,6 +244,9 @@ private final class FakeEntity: Sendable {
       response.messageType = .connectRxResponse
       response.status = behaviour.withLock(\.acmpStatus)
       response.connectionCount = 1
+      response.streamID = UniqueIdentifier(0x0200_0000_0003_0000)
+      response.streamDestAddress = [0x91, 0xE0, 0xF0, 0x00, 0xFE, 0x01]
+      response.streamVlanID = 2
       try? await send(.acmp(response), to: AvdeccMulticastMacAddress)
     default:
       break
@@ -992,6 +995,9 @@ final class ControllerTests: XCTestCase {
     XCTAssertEqual(state.talkerStream, talker)
     XCTAssertEqual(state.listenerStream, listener)
     XCTAssertEqual(state.connectionCount, 1)
+    XCTAssertEqual(state.streamID, UniqueIdentifier(0x0200_0000_0003_0000))
+    XCTAssertEqual(UInt64(eui48: state.streamDestAddress), 0x91E0_F000_FE01)
+    XCTAssertEqual(state.streamVlanID, 2)
     // our own controller response is not reported as sniffed
     let sniffed = await first(events, timeout: .milliseconds(100)) {
       if case .controllerConnectResponse = $0 { true } else { false }
