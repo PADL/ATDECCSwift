@@ -129,7 +129,8 @@ final class CommandTests: XCTestCase {
       "log sync interval: -3",
       "CLOCK_SOURCE 0 \"CRF\"", "clock source type: INPUT_STREAM",
       "clock source location: STREAM_INPUT 0",
-      "CLOCK_DOMAIN 0 \"Domain\"", "clock sources: 0",
+      "CLOCK_SOURCE 1 \"Internal\"", "clock source type: INTERNAL",
+      "CLOCK_DOMAIN 0 \"Domain\"", "clock sources: 0, 1",
     ] {
       XCTAssertTrue(out.contains(expected), "missing \(expected) in\n\(out)")
     }
@@ -236,6 +237,81 @@ final class CommandTests: XCTestCase {
     XCTAssertEqual(
       json,
       "{\"descriptor_type\":\"AVB_INTERFACE\",\"descriptor_index\":0,\"counters_valid\":\"0x00000801\",\"LINK_UP\":1,\"COUNTER_11\":48000}"
+    )
+  }
+
+  // MARK: - Clocks
+
+  func testClockSources() async throws {
+    entity.state.withLock { $0.clockSource = 1 }
+    let (status, out, err) = try await run("clock-sources \(id)")
+    XCTAssertEqual(status, 0, err)
+    XCTAssertEqual(out, """
+    CLOCK_DOMAIN 0 "Domain"
+      clock source index: 1
+      clock sources:
+        - clock source index: 0
+          name: CRF
+          clock source type: INPUT_STREAM
+          clock source location: STREAM_INPUT 0
+          current: no
+        - clock source index: 1
+          name: Internal
+          clock source type: INTERNAL
+          clock source location: CLOCK_DOMAIN 0
+          current: yes
+    """)
+    XCTAssertTrue(entity.state.withLock(\.commands).contains(.getClockSource))
+  }
+
+  func testClockSourcesOfOneDomainJSON() async throws {
+    let (status, out, err) = try await run("clock-sources \(id) 0 --json")
+    XCTAssertEqual(status, 0, err)
+    XCTAssertTrue(out.hasPrefix(
+      #"{"descriptor_type":"CLOCK_DOMAIN","descriptor_index":0,"name":"Domain","clock_source_index":0,"#
+    ), out)
+    XCTAssertTrue(out.contains(
+      #"{"clock_source_index":0,"name":"CRF","clock_source_type":"INPUT_STREAM","clock_source_location":"STREAM_INPUT 0","current":true}"#
+    ), out)
+    // the domain is named, so the CONFIGURATION is not read for its count
+    let reads = entity.state.withLock(\.commands).filter { $0 == .readDescriptor }.count
+    XCTAssertEqual(reads, 4)
+
+    let (missing, _, missingErr) = try await run("clock-sources \(id) 3")
+    XCTAssertEqual(missing, 1)
+    XCTAssertTrue(
+      missingErr.contains("READ_DESCRIPTOR CLOCK_DOMAIN 3 failed: NO_SUCH_DESCRIPTOR"),
+      missingErr
+    )
+  }
+
+  func testSetClockSource() async throws {
+    var (status, out, err) = try await run("set-clock-source \(id) 0 1")
+    XCTAssertEqual(status, 0, err)
+    XCTAssertEqual(out, "CLOCK_DOMAIN 0\n  clock source index: 1")
+    XCTAssertEqual(entity.state.withLock(\.clockSource), 1)
+
+    (status, _, err) = try await run("set-clock-source \(id) 0 5")
+    XCTAssertEqual(status, 1)
+    XCTAssertTrue(err.contains("SET_CLOCK_SOURCE failed: BAD_ARGUMENTS"), err)
+    XCTAssertEqual(entity.state.withLock(\.clockSource), 1)
+  }
+
+  func testSetClockSourceAcquiringTheEntity() async throws {
+    entity.state.withLock { $0.requiresAcquire = true }
+    var (status, _, err) = try await run("set-clock-source \(id) 0 1")
+    XCTAssertEqual(status, 1)
+    XCTAssertTrue(err.contains("SET_CLOCK_SOURCE failed: ACQUIRED_BY_OTHER"), err)
+
+    (status, _, err) = try await run("set-clock-source \(id) 0 1 --acquire --lock")
+    XCTAssertEqual(status, 0, err)
+    let state = entity.state.withLock { $0 }
+    XCTAssertEqual(state.clockSource, 1)
+    XCTAssertNil(state.acquiredBy)
+    XCTAssertNil(state.lockedBy)
+    XCTAssertEqual(
+      state.commands.suffix(5),
+      [.acquireEntity, .lockEntity, .setClockSource, .lockEntity, .acquireEntity]
     )
   }
 

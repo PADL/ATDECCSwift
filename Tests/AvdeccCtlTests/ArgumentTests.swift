@@ -107,6 +107,29 @@ final class ArgumentTests: XCTestCase {
     )
   }
 
+  func testClockSourceCommands() throws {
+    let motu = UniqueIdentifier(0x0001_F2FF_FEFE_D2A4)
+    XCTAssertEqual(
+      try parse("clock-sources 0x0001f2fffefed2a4").command,
+      .clockSources(motu, clockDomain: nil)
+    )
+    XCTAssertEqual(
+      try parse("clock-sources 0x0001f2fffefed2a4 1").command,
+      .clockSources(motu, clockDomain: 1)
+    )
+    XCTAssertEqual(
+      try parse("set-clock-source 0x0001f2fffefed2a4 0 2 --acquire").command,
+      .setClockSource(motu, clockDomain: 0, clockSource: 2, acquire: true, lock: false)
+    )
+    XCTAssertEqual(
+      try parse("set-clock-source 0x0001f2fffefed2a4 0 0x1 --lock").command,
+      .setClockSource(motu, clockDomain: 0, clockSource: 1, acquire: false, lock: true)
+    )
+    assertUsageError("set-clock-source 0x1 0", "needs a descriptor index")
+    assertUsageError("clock-sources 0x1 0 1", "unexpected argument '1'")
+    assertUsageError("clock-sources 0x1 --acquire", "--acquire does not apply to clock-sources")
+  }
+
   func testCountersDescriptorTypes() throws {
     let id = UniqueIdentifier(1)
     XCTAssertEqual(try parse("counters 0x1 input 0").command, .counters(id, .streamInput, 0))

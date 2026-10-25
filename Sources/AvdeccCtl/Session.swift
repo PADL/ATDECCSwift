@@ -133,6 +133,16 @@ final class Session<Port: NetworkPort>: Sendable {
       return try await Report(records: [streaming(id, direction, index, start: false)])
     case let .counters(id, type, index):
       return try await Report(records: [counters(id, type, index)])
+    case let .clockSources(id, clockDomain):
+      return try await clockSources(id, clockDomain)
+    case let .setClockSource(id, clockDomain, clockSource, acquire, lock):
+      return try await Report(records: [setClockSource(
+        id,
+        clockDomain,
+        clockSource,
+        acquire: acquire,
+        lock: lock
+      )])
     case let .connect(listener, talker):
       let state = try await step("CONNECT_RX") {
         try await controller.connectStream(talker: talker, listener: listener)
@@ -436,22 +446,14 @@ final class Session<Port: NetworkPort>: Sendable {
         ("port_number", .uint(interface.portNumber)),
       ])
     case let .clockSource(source):
-      let type = switch source.clockSourceTypeRaw {
-      case 0: "INTERNAL"
-      case 1: "EXTERNAL"
-      case 2: "INPUT_STREAM"
-      default: hex(source.clockSourceTypeRaw, width: 4)
-      }
       return (.clockSource, source.objectName, [
-        ("clock_source_type", .string(type)),
+        ("clock_source_type", .string(clockSourceTypeName(source))),
         (
           "clock_source_flags",
           .strings(flagNames(source.clockSourceFlags.rawValue, clockSourceFlagNames))
         ),
         ("clock_source_identifier", .string(hex(source.clockSourceIdentifier))),
-        ("clock_source_location", .string(
-          "\(descriptorTypeName(source.clockSourceLocationType)) \(source.clockSourceLocationIndex)"
-        )),
+        ("clock_source_location", .string(clockSourceLocation(source))),
       ])
     case let .clockDomain(domain):
       return (.clockDomain, domain.objectName, [
@@ -461,6 +463,19 @@ final class Session<Port: NetworkPort>: Sendable {
     default:
       return (.invalid, nil, [])
     }
+  }
+
+  private func clockSourceTypeName(_ source: ClockSourceDescriptor) -> String {
+    switch source.clockSourceTypeRaw {
+    case 0: "INTERNAL"
+    case 1: "EXTERNAL"
+    case 2: "INPUT_STREAM"
+    default: hex(source.clockSourceTypeRaw, width: 4)
+    }
+  }
+
+  private func clockSourceLocation(_ source: ClockSourceDescriptor) -> String {
+    "\(descriptorTypeName(source.clockSourceLocationType)) \(source.clockSourceLocationIndex)"
   }
 
   private func streamFields(_ stream: StreamDescriptor) -> [Field] {
@@ -547,6 +562,28 @@ final class Session<Port: NetworkPort>: Sendable {
     acquire: Bool, lock: Bool
   ) async throws -> Record {
     try await waitForEntity(id)
+    let format = try await withOwnership(id, acquire: acquire, lock: lock) {
+      try await step("SET_STREAM_FORMAT") {
+        direction == .input
+          ? try await controller.setStreamInputFormat(id: id, streamIndex: index, to: format)
+          : try await controller.setStreamOutputFormat(id: id, streamIndex: index, to: format)
+      }
+    }
+    return Record(
+      heading: streamHeading(direction, index),
+      keys: descriptorKeys(direction.descriptorType, index),
+      fields: [("stream_format", .string(streamFormatDescription(format)))]
+    )
+  }
+
+  /// Runs `body` with the entity acquired and/or locked if asked, releasing and unlocking it
+  /// afterwards whether or not `body` succeeds.
+  private func withOwnership<T: Sendable>(
+    _ id: UniqueIdentifier,
+    acquire: Bool,
+    lock: Bool,
+    _ body: () async throws -> T
+  ) async throws -> T {
     if acquire {
       try await step("ACQUIRE_ENTITY") { try await controller.acquireEntity(id: id) }
     }
@@ -558,20 +595,10 @@ final class Session<Port: NetworkPort>: Sendable {
         throw error
       }
     }
-    let result = await Result {
-      try await step("SET_STREAM_FORMAT") {
-        direction == .input
-          ? try await controller.setStreamInputFormat(id: id, streamIndex: index, to: format)
-          : try await controller.setStreamOutputFormat(id: id, streamIndex: index, to: format)
-      }
-    }
+    let result = await Result { try await body() }
     if lock { _ = try? await controller.unlockEntity(id: id) }
     if acquire { _ = try? await controller.releaseEntity(id: id) }
-    return try Record(
-      heading: streamHeading(direction, index),
-      keys: descriptorKeys(direction.descriptorType, index),
-      fields: [("stream_format", .string(streamFormatDescription(result.get())))]
-    )
+    return try result.get()
   }
 
   private func streaming(
@@ -620,6 +647,80 @@ final class Session<Port: NetworkPort>: Sendable {
       heading: "\(descriptorTypeName(type)) \(index) counters",
       keys: descriptorKeys(type, index),
       fields: fields
+    )
+  }
+
+  // MARK: - Clocks
+
+  /// The current configuration's CLOCK_DOMAINs (or `clockDomain` alone), each with its
+  /// CLOCK_SOURCEs and the one GET_CLOCK_SOURCE reports as current.
+  private func clockSources(_ id: UniqueIdentifier, _ clockDomain: UInt16?) async throws -> Report {
+    try await waitForEntity(id)
+    let configurationIndex = try await step("READ_DESCRIPTOR ENTITY") {
+      try await controller.readEntityDescriptor(id: id)
+    }.currentConfiguration
+    let domains: [UInt16]
+    if let clockDomain {
+      domains = [clockDomain]
+    } else {
+      let configuration = try await step("READ_DESCRIPTOR CONFIGURATION") {
+        try await controller.readConfigurationDescriptor(
+          id: id,
+          configurationIndex: configurationIndex
+        )
+      }
+      domains = Array(0..<configuration.descriptorCount(.clockDomain))
+    }
+    var report = Report(records: [])
+    for domainIndex in domains {
+      let domain = try await step("READ_DESCRIPTOR CLOCK_DOMAIN \(domainIndex)") {
+        try await controller.readClockDomainDescriptor(
+          id: id,
+          configurationIndex: configurationIndex,
+          clockDomainIndex: domainIndex
+        )
+      }
+      let current = try await step("GET_CLOCK_SOURCE") {
+        try await controller.getClockSource(id: id, clockDomainIndex: domainIndex)
+      }
+      var sources = [Value]()
+      for sourceIndex in domain.clockSources {
+        let source = try await step("READ_DESCRIPTOR CLOCK_SOURCE \(sourceIndex)") {
+          try await controller.readClockSourceDescriptor(
+            id: id,
+            configurationIndex: configurationIndex,
+            clockSourceIndex: sourceIndex
+          )
+        }
+        sources.append(.object([
+          ("clock_source_index", .uint(sourceIndex)),
+          ("name", .string(source.objectName)),
+          ("clock_source_type", .string(clockSourceTypeName(source))),
+          ("clock_source_location", .string(clockSourceLocation(source))),
+          ("current", .bool(sourceIndex == current)),
+        ]))
+      }
+      var record = descriptorRecord(.clockDomain(domain), index: domainIndex)
+      record.fields = [("clock_source_index", .uint(current)), ("clock_sources", .array(sources))]
+      report.records.append(record)
+    }
+    return report
+  }
+
+  private func setClockSource(
+    _ id: UniqueIdentifier, _ clockDomain: UInt16, _ clockSource: UInt16,
+    acquire: Bool, lock: Bool
+  ) async throws -> Record {
+    try await waitForEntity(id)
+    let applied = try await withOwnership(id, acquire: acquire, lock: lock) {
+      try await step("SET_CLOCK_SOURCE") {
+        try await controller.setClockSource(id: id, clockDomainIndex: clockDomain, to: clockSource)
+      }
+    }
+    return Record(
+      heading: "\(descriptorTypeName(.clockDomain)) \(clockDomain)",
+      keys: descriptorKeys(.clockDomain, clockDomain),
+      fields: [("clock_source_index", .uint(applied))]
     )
   }
 

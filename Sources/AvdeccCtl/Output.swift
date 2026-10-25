@@ -95,9 +95,12 @@ private func appendText(_ fields: [Field], indent: String, to lines: inout [Stri
     case let .array(elements) where elements.contains(where: \.isCompound):
       lines.append("\(indent)\(label):")
       for element in elements {
-        if case let .object(nested) = element {
-          lines.append("\(indent)  -")
-          appendText(nested, indent: indent + "    ", to: &lines)
+        if case let .object(nested) = element, !nested.isEmpty {
+          // the first field on the dash's line, the rest beneath it
+          var nestedLines = [String]()
+          appendText(nested, indent: indent + "    ", to: &nestedLines)
+          nestedLines[0] = "\(indent)  - " + nestedLines[0].dropFirst(indent.count + 4)
+          lines += nestedLines
         } else {
           lines.append("\(indent)  - \(element.text)")
         }

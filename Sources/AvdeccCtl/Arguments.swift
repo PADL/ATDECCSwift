@@ -64,6 +64,15 @@ public enum Command: Sendable, Equatable {
   case startStreaming(UniqueIdentifier, Direction, UInt16)
   case stopStreaming(UniqueIdentifier, Direction, UInt16)
   case counters(UniqueIdentifier, DescriptorType, UInt16)
+  /// Every CLOCK_DOMAIN of the current configuration, or the one given.
+  case clockSources(UniqueIdentifier, clockDomain: UInt16?)
+  case setClockSource(
+    UniqueIdentifier,
+    clockDomain: UInt16,
+    clockSource: UInt16,
+    acquire: Bool,
+    lock: Bool
+  )
   case connect(listener: StreamIdentification, talker: StreamIdentification)
   /// With no talker, the listener's GET_RX_STATE names it.
   case disconnect(listener: StreamIdentification, talker: StreamIdentification?)
@@ -183,6 +192,20 @@ public struct Invocation: Sendable, Equatable {
         arguments.entityID(),
         parseDescriptorType(arguments.next("descriptor type")),
         arguments.index()
+      )
+    case "clock-sources":
+      command = try .clockSources(
+        arguments.entityID(),
+        clockDomain: arguments.isEmpty ? nil : arguments.index()
+      )
+    case "set-clock-source":
+      allowed = ["--acquire", "--lock"]
+      command = try .setClockSource(
+        arguments.entityID(),
+        clockDomain: arguments.index(),
+        clockSource: arguments.index(),
+        acquire: flags.contains("--acquire"),
+        lock: flags.contains("--lock")
       )
     case "connect":
       command = try .connect(
@@ -329,6 +352,11 @@ Commands:
   start|stop <entity> input|output <index>     START_STREAMING / STOP_STREAMING
   counters <entity> <descriptor type> <index>  GET_COUNTERS (entity, avb-interface,
                                                clock-domain, input, output, ptp-port)
+  clock-sources <entity> [<clock domain>]      the CLOCK_DOMAINs, each with its CLOCK_SOURCEs
+                                               and the current one (GET_CLOCK_SOURCE)
+  set-clock-source <entity> <clock domain> <clock source> [--acquire] [--lock]
+                                               SET_CLOCK_SOURCE, acquiring or locking the
+                                               entity around it if asked
   connect <listener> <index> <talker> <index>  ACMP CONNECT_RX
   disconnect <listener> <index> [<talker> <index>]
                                                ACMP DISCONNECT_RX; the talker defaults to the
@@ -361,4 +389,6 @@ Examples:
   avdecc-ctl -p enp8s0 set-format 0x0001f2fffefed2a4 output 0 aaf,48k,int32/24,8ch,6spf --acquire
   avdecc-ctl -p enp8s0 connect 0x8c1f64fffee89037 1 0x8c1f64fffee89001 0
   avdecc-ctl -p enp8s0 counters 0x8c1f64fffee89037 input 0
+  avdecc-ctl -p enp8s0 clock-sources 0x0001f2fffefed2a4
+  avdecc-ctl -p enp8s0 set-clock-source 0x0001f2fffefed2a4 0 1 --acquire
 """

@@ -54,14 +54,17 @@ private func header(_ type: DescriptorType, _ index: UInt16) -> [UInt8] {
 }
 
 /// A talker and listener on a virtual network: ENTITY, CONFIGURATION, an AUDIO_UNIT,
-/// STREAM_INPUT 0 (CRF) and 1 (AAF), STREAM_OUTPUT 0 (AAF), an AVB_INTERFACE, a CLOCK_SOURCE,
-/// a CLOCK_DOMAIN and an IDENTIFY CONTROL, answering the commands avdecc-ctl sends.
+/// STREAM_INPUT 0 (CRF) and 1 (AAF), STREAM_OUTPUT 0 (AAF), an AVB_INTERFACE, CLOCK_SOURCE 0
+/// (STREAM_INPUT 0) and 1 (internal), a CLOCK_DOMAIN of both and an IDENTIFY CONTROL, answering
+/// the commands avdecc-ctl sends.
 final class FakeEntity: Sendable {
   struct State {
     var inputFormats = [crfFormat, aaf8Format]
     var outputFormats = [aaf8Format]
-    /// SET_STREAM_FORMAT is refused with ACQUIRED_BY_OTHER unless the controller has acquired the
-    /// entity.
+    /// CLOCK_DOMAIN 0's current clock source.
+    var clockSource: UInt16 = 0
+    /// SET_STREAM_FORMAT and SET_CLOCK_SOURCE are refused with ACQUIRED_BY_OTHER unless the
+    /// controller has acquired the entity.
     var requiresAcquire = false
     var acquiredBy: UniqueIdentifier?
     var lockedBy: UniqueIdentifier?
@@ -233,6 +236,22 @@ final class FakeEntity: Sendable {
         .success,
         be16(type.rawValue) + be16(index) + be32(1 | 1 << 11) + counters.flatMap(be32)
       )
+    case let .getClockSource(type, index):
+      guard type == .clockDomain, index == 0 else { return (.noSuchDescriptor, nil) }
+      return (
+        .success,
+        be16(type.rawValue) + be16(index) + be16(state.withLock(\.clockSource)) + be16(0)
+      )
+    case let .setClockSource(type, index, source):
+      return state.withLock { state in
+        guard type == .clockDomain, index == 0 else { return (.noSuchDescriptor, nil) }
+        if state.requiresAcquire, state.acquiredBy != controller {
+          return (.acquiredByOther, nil)
+        }
+        guard source < 2 else { return (.badArguments, nil) }
+        state.clockSource = source
+        return (.success, be16(type.rawValue) + be16(index) + be16(source) + be16(0))
+      }
     case .startStreaming, .stopStreaming:
       return (.success, nil)
     case let .setControl(_, index, values):
@@ -256,10 +275,8 @@ final class FakeEntity: Sendable {
       )
     case (.configuration, 0):
       let counts: [(DescriptorType, UInt16)] = [
-        (.audioUnit, 1), (.streamInput, 2), (.streamOutput, 1), (.avbInterface, 1), (
-          .clockSource,
-          1
-        ),
+        (.audioUnit, 1), (.streamInput, 2), (.streamOutput, 1), (.avbInterface, 1),
+        (.clockSource, 2),
         (.control, 1), (.clockDomain, 1),
       ]
       return header(.configuration, 0) + fixedString("Default") + be16(0xFFFF) +
@@ -291,15 +308,16 @@ final class FakeEntity: Sendable {
         be16(ClockSourceFlags.streamID.rawValue),
         be16(2), be64(0), be16(DescriptorType.streamInput.rawValue), be16(0)
       )
-    case (.clockDomain, 0):
+    case (.clockSource, 1):
       return octets(
-        header(.clockDomain, 0),
-        fixedString("Domain"),
-        be16(0xFFFF),
-        be16(0),
-        be16(76),
-        be16(1),
-        be16(0)
+        header(.clockSource, 1), fixedString("Internal"), be16(0xFFFF), be16(0),
+        be16(0), be64(0), be16(DescriptorType.clockDomain.rawValue), be16(0)
+      )
+    case (.clockDomain, 0):
+      // clock_source_index, clock_sources_offset, clock_sources_count, clock_sources
+      return octets(
+        header(.clockDomain, 0), fixedString("Domain"), be16(0xFFFF),
+        be16(state.withLock(\.clockSource)), be16(76), be16(2), be16(0), be16(1)
       )
     case (.control, 0):
       // a LINEAR_UINT8 IDENTIFY control: min, max, step, default, current, unit, string

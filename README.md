@@ -187,6 +187,8 @@ whole command including discovery of its entity). Output is text, or JSON with `
 | `set-format <entity> input\|output <index> <format> [--acquire] [--lock]` | SET_STREAM_FORMAT, acquiring or locking the entity around it if asked |
 | `start\|stop <entity> input\|output <index>` | START_STREAMING / STOP_STREAMING |
 | `counters <entity> <descriptor type> <index>` | GET_COUNTERS, named (`entity`, `avb-interface`, `clock-domain`, `input`, `output`, `ptp-port`) |
+| `clock-sources <entity> [<clock domain>]` | the current configuration's CLOCK_DOMAINs (or the one given), each with its CLOCK_SOURCEs (index, name, type, location) and the current one from GET_CLOCK_SOURCE |
+| `set-clock-source <entity> <clock domain> <clock source> [--acquire] [--lock]` | SET_CLOCK_SOURCE, printing the index the entity applied; acquiring or locking the entity around it if asked |
 | `connect <listener> <index> <talker> <index>` | ACMP CONNECT_RX |
 | `disconnect <listener> <index> [<talker> <index>]` | ACMP DISCONNECT_RX; the talker defaults to the one GET_RX_STATE reports |
 | `rx-state <listener> <index>`, `tx-state <talker> <index>` | ACMP GET_RX_STATE; GET_TX_STATE and the talker's connections |
@@ -214,6 +216,32 @@ avdecc-ctl -p enp8s0 set-format 0x0001f2fffefed2a4 output 0 aaf,48k,int32/24,8ch
 avdecc-ctl -p enp8s0 connect 0x8c1f64fffee89037 1 0x8c1f64fffee89001 0
 avdecc-ctl -p enp8s0 counters 0x8c1f64fffee89037 input 0
 ```
+
+To move an entity between clock sources, read the indices from `clock-sources` first: they are
+the entity's own, not fixed by the standard. On the bench MOTU 16A, for example, switch from
+its internal clock to the clock recovered from its gPTP-timed input stream and back:
+
+```sh
+avdecc-ctl -p enp8s0 clock-sources 0x0001f2fffefed2a4
+# CLOCK_DOMAIN 0 "..."
+#   clock source index: 0
+#   clock sources:
+#     - clock source index: 0
+#       name: Internal
+#       clock source type: INTERNAL
+#       clock source location: CLOCK_DOMAIN 0
+#       current: yes
+#     - clock source index: 1
+#       ...
+#       clock source type: INPUT_STREAM
+#       clock source location: STREAM_INPUT 0
+#       current: no
+avdecc-ctl -p enp8s0 set-clock-source 0x0001f2fffefed2a4 0 1 --acquire
+avdecc-ctl -p enp8s0 set-clock-source 0x0001f2fffefed2a4 0 0 --acquire
+```
+
+The indices and names above are illustrative; use the ones `clock-sources` prints. A refused
+change exits with 1 and names the status (`SET_CLOCK_SOURCE failed: ACQUIRED_BY_OTHER`).
 
 Build it with `swift build -c release --product avdecc-ctl`. `--static-swift-stdlib` does not
 work with Swift 6.4, so copy the Swift runtime libraries alongside the binary to a box without
