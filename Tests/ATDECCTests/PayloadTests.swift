@@ -375,6 +375,34 @@ final class PayloadTests: XCTestCase {
     )
   }
 
+  // descriptor_type, descriptor_index, clock_source_index, reserved (IEEE 1722.1-2021 Clause 7.4.23)
+  func testClockSourcePayloads() throws {
+    let set = AemCommandPayload.setClockSource(descriptorType: .clockDomain, descriptorIndex: 0, clockSourceIndex: 2)
+    let setBytes = try set.serialized()
+    XCTAssertEqual(set.commandTypeRaw, AemCommandType.setClockSource.rawValue)
+    XCTAssertEqual(setBytes, be16(DescriptorType.clockDomain.rawValue) + be16(0) + be16(2) + be16(0))
+    XCTAssertEqual(try AemCommandPayload(commandTypeRaw: set.commandTypeRaw, data: setBytes), set)
+
+    // GET_CLOCK_SOURCE commands carry the descriptor only (Clause 7.4.24.1)
+    let get = AemCommandPayload.getClockSource(descriptorType: .clockDomain, descriptorIndex: 1)
+    let getBytes = try get.serialized()
+    XCTAssertEqual(get.commandTypeRaw, AemCommandType.getClockSource.rawValue)
+    XCTAssertEqual(getBytes, be16(DescriptorType.clockDomain.rawValue) + be16(1))
+    XCTAssertEqual(try AemCommandPayload(commandTypeRaw: get.commandTypeRaw, data: getBytes), get)
+
+    let response = be16(DescriptorType.clockDomain.rawValue) + be16(1) + be16(3) + be16(0)
+    guard case let .getClockSource(type, index, source) =
+      try AemResponsePayload(commandTypeRaw: get.commandTypeRaw, data: response)
+    else { return XCTFail("expected GET_CLOCK_SOURCE") }
+    XCTAssertEqual(type, .clockDomain)
+    XCTAssertEqual(index, 1)
+    XCTAssertEqual(source, 3)
+    guard case let .setClockSource(_, _, applied) =
+      try AemResponsePayload(commandTypeRaw: set.commandTypeRaw, data: response)
+    else { return XCTFail("expected SET_CLOCK_SOURCE") }
+    XCTAssertEqual(applied, 3)
+  }
+
   // dynamic_info: length, reserved, status, reserved, command_type, data (Figure 7-94)
   func testGetDynamicInfoPayloads() throws {
     let command = AemCommandPayload.getDynamicInfo(commands: [
