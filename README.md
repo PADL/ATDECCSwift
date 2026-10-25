@@ -51,7 +51,8 @@ for await event in await controller.events() {
 }
 ```
 
-See `Examples/Discovery/Discovery.swift` for a complete, runnable example.
+See `Examples/Discovery/Discovery.swift` for a complete, runnable example, and
+[avdecc-ctl](#avdecc-ctl) for a controller command line.
 
 ## Architecture
 
@@ -169,6 +170,57 @@ as one end of a `socketpair`, and does not reconnect.
 
 ```sh
 .build/debug/avdecc-discovery unix:/run/mediabridge/atdecc.sock
+```
+
+## avdecc-ctl
+
+`avdecc-ctl` is a controller for the command line, built on this library. Each command takes
+`--port` (an Ethernet interface, which needs `CAP_NET_RAW`; `unix:path`, which reaches only the
+entity on the same host; or a serial device) and `--timeout` (seconds, default 5, bounding the
+whole command including discovery of its entity). Output is text, or JSON with `--json`.
+
+| Command | Does |
+|---|---|
+| `discover [--seconds N]` | lists the entities heard in N seconds (default 3): entity and model IDs, name, capabilities, stream counts, gPTP grandmaster |
+| `dump <entity>` | reads the current configuration's ENTITY, CONFIGURATION, AUDIO_UNIT, STREAM_INPUT, STREAM_OUTPUT, AVB_INTERFACE, CLOCK_SOURCE and CLOCK_DOMAIN descriptors, with each stream's current and supported formats decoded |
+| `stream-info <entity> input\|output <index>` | GET_STREAM_INFO |
+| `set-format <entity> input\|output <index> <format> [--acquire] [--lock]` | SET_STREAM_FORMAT, acquiring or locking the entity around it if asked |
+| `start\|stop <entity> input\|output <index>` | START_STREAMING / STOP_STREAMING |
+| `counters <entity> <descriptor type> <index>` | GET_COUNTERS, named (`entity`, `avb-interface`, `clock-domain`, `input`, `output`, `ptp-port`) |
+| `connect <listener> <index> <talker> <index>` | ACMP CONNECT_RX |
+| `disconnect <listener> <index> [<talker> <index>]` | ACMP DISCONNECT_RX; the talker defaults to the one GET_RX_STATE reports |
+| `rx-state <listener> <index>`, `tx-state <talker> <index>` | ACMP GET_RX_STATE; GET_TX_STATE and the talker's connections |
+| `acquire <entity> [--persistent]`, `release`, `lock`, `unlock` | ACQUIRE_ENTITY / LOCK_ENTITY |
+| `identify <entity> [--off]` | sets the IDENTIFY control, found from the advertisement or the CONTROL descriptors |
+
+Entity IDs are 16 hex digits or `0x…`. A stream format is hex (`0x0205021802006000`) or a spec,
+which is also how formats are printed: `aaf,48k,int32/24,8ch,6spf` (rate, sample format with
+an optional bit depth, channels, samples per frame, optionally `ut`), `crf,48k` (optionally
+`interval=`, `tpp=`, `type=`, `pull=`) or `iec61883-6,48k,8ch` (AM824).
+
+The controller's entity ID is the port's MAC address followed by `c71d` unless `--controller-id`
+says otherwise, so successive invocations are the same controller: an entity acquired by
+`acquire` stays acquired by `avdecc-ctl` until `release`.
+
+The exit status is 0 on success; 1 when an entity answers with a failure status, which is
+printed (`SET_STREAM_FORMAT failed: ACQUIRED_BY_OTHER`); and 2 for a usage error, a timeout or a
+port that could not be opened.
+
+```sh
+avdecc-ctl -p unix:/run/mediabridge/atdecc.sock dump 0x8c1f64fffee89001
+avdecc-ctl -p enp8s0 discover
+avdecc-ctl -p enp8s0 stream-info 0x8c1f64fffee89037 input 1
+avdecc-ctl -p enp8s0 set-format 0x0001f2fffefed2a4 output 0 aaf,48k,int32/24,8ch,6spf --acquire
+avdecc-ctl -p enp8s0 connect 0x8c1f64fffee89037 1 0x8c1f64fffee89001 0
+avdecc-ctl -p enp8s0 counters 0x8c1f64fffee89037 input 0
+```
+
+Build it with `swift build -c release --product avdecc-ctl`. `--static-swift-stdlib` does not
+work with Swift 6.4, so copy the Swift runtime libraries alongside the binary to a box without
+a toolchain, and point the loader at them:
+
+```sh
+LD_LIBRARY_PATH=/usr/local/lib/swift avdecc-ctl -p enp8s0 discover
 ```
 
 ## License

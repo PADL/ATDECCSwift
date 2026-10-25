@@ -21,6 +21,10 @@ let package = Package(
       name: "avdecc-discovery",
       targets: ["Discovery"]
     ),
+    .executable(
+      name: "avdecc-ctl",
+      targets: ["AvdeccCtlTool"]
+    ),
   ],
   dependencies: [
     .package(url: "https://github.com/PADL/IEEE802Swift", from: "0.2.1"),
@@ -58,6 +62,34 @@ let package = Package(
         .product(name: "Logging", package: "swift-log"),
       ],
       path: "Examples/Discovery",
+      swiftSettings: CommonSwiftSettings
+    ),
+    // avdecc-ctl, a controller command line; a library so that its tests can import it.
+    .target(
+      name: "AvdeccCtl",
+      dependencies: [
+        "ATDECC",
+        .product(name: "IEEE802", package: "IEEE802Swift"),
+        .product(name: "Logging", package: "swift-log"),
+      ],
+      swiftSettings: CommonSwiftSettings
+    ),
+    .executableTarget(
+      name: "AvdeccCtlTool",
+      dependencies: [
+        "AvdeccCtl",
+        .product(name: "Logging", package: "swift-log"),
+      ],
+      swiftSettings: CommonSwiftSettings
+    ),
+    .testTarget(
+      name: "AvdeccCtlTests",
+      dependencies: [
+        "ATDECC",
+        "AvdeccCtl",
+        .product(name: "IEEE802", package: "IEEE802Swift"),
+        .product(name: "Logging", package: "swift-log"),
+      ],
       swiftSettings: CommonSwiftSettings
     ),
     .testTarget(
