@@ -595,7 +595,13 @@ final class Session<Port: NetworkPort>: Sendable {
         throw error
       }
     }
-    let result = await Result { try await body() }
+    // do/catch rather than Result's async initializer, which Swift 6.3 lacks
+    let result: Result<T, any Error>
+    do {
+      result = try await .success(body())
+    } catch {
+      result = .failure(error)
+    }
     if lock { _ = try? await controller.unlockEntity(id: id) }
     if acquire { _ = try? await controller.releaseEntity(id: id) }
     return try result.get()
