@@ -11,9 +11,10 @@ entities, which responses raise notifications) deliberately matches it.
 
 ## Status
 
-- Linux only. Frames are sent and received with io_uring
-  ([IORingSwift](https://github.com/PADL/IORingSwift)), on `AF_PACKET` sockets or serial
-  devices.
+- Linux and macOS. On Linux, frames are sent and received with io_uring
+  ([IORingSwift](https://github.com/PADL/IORingSwift)), on `AF_PACKET` sockets, serial devices
+  or Unix domain sockets. On macOS, `EthernetPort` uses a BPF device; the serial and Unix
+  domain socket ports are Linux only. See [macOS](#macos).
 - ATDECC Controller role. The codecs encode and decode commands and responses in both
   directions, so an entity (talker/listener) responder can be added later.
 - Swift 6 strict concurrency: `EndStation` and `Controller` are actors.
@@ -61,7 +62,8 @@ The names follow IEEE 1722.1-2021:
 - **`NetworkPort`** — a protocol for the link AVTP frames travel on. `EthernetPort` joins the
   AVDECC multicast groups (rather than going promiscuous, so it works behind bridges that
   filter multicast in hardware); `SerialPort` reaches a single entity over a UART;
-  `UnixSocketPort` reaches a single entity on the same host over an `AF_UNIX` datagram socket;
+  `UnixSocketPort` reaches a single entity on the same host over an `AF_UNIX` datagram socket
+  (these two on Linux only);
   and `VirtualPort` connects ports on an in-memory `VirtualNetwork` for tests and simulation.
 - **`EndStation<Port>`** — an ATDECC End Station: owns a port, dispatches received PDUs to
   its entities, and issues dynamic entity IDs.
@@ -76,6 +78,36 @@ The names follow IEEE 1722.1-2021:
 
 Controllers and end stations are generic over their port type, so frames are handled without
 existential dispatch.
+
+## macOS
+
+`EthernetPort` on macOS is a Berkeley Packet Filter port. Everything that needs no system call
+(reading a BPF buffer, the filter program) is in `BpfBuffer.swift`, and everything else behind
+`NetworkPort`, so the codecs and state machines are the same on every platform.
+
+- **BPF access.** The `/dev/bpf*` devices are root's on stock macOS. A process without access
+  gets `EthernetPortError.bpfPermissionDenied`; granting it, usually through a group, is up to
+  whoever installs the software.
+- **Multicast.** Joining the AVDECC groups (`SIOCADDMULTI`) needs root whatever the BPF
+  permissions, and otherwise throws `EthernetPortError.multicastMembershipDenied`. The default,
+  `.joinGroups`, matches Linux; a process that isn't root passes `.promiscuous`, which needs only
+  BPF access. The kernel filter still passes only ADP, AECP and ACMP frames, but promiscuous mode
+  is the interface's, for as long as the port is open. Unlike promiscuous mode, a membership is
+  not undone by the kernel when a process exits, only when the port is released.
+- **Link state** is polled once a second.
+
+```swift
+let port = try EthernetPort(interfaceName: "en0", multicastReception: .promiscuous)
+let endStation = EndStation(port: port)
+let controller = try await Controller(
+  endStation: endStation,
+  entityID: endStation.makeDynamicEntityID()
+)
+```
+
+`avdecc-ctl -p` and `avdecc-discovery` take `promisc:en0` to do the same. `avdecc-capture en0 5`
+prints the ATDECC frames that arrive for five seconds; it opens the BPF device read-only and starts
+no controller, so it cannot transmit.
 
 ## Migrating from AVDECCSwift
 
@@ -96,8 +128,8 @@ existential dispatch.
 
 ## Building
 
-Requires Swift 6.2 or later on Linux, with `liburing` and, for link state monitoring through
-[NetLinkSwift](https://github.com/PADL/NetLinkSwift), `libnl` installed:
+Requires Swift 6.3 or later. macOS 26 needs nothing else; Linux needs `liburing` and, for link
+state monitoring through [NetLinkSwift](https://github.com/PADL/NetLinkSwift), `libnl`:
 
 ```sh
 apt install liburing-dev pkg-config libnl-3-dev libnl-route-3-dev libnl-nf-3-dev libnl-genl-3-dev \

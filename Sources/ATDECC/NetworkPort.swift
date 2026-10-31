@@ -22,9 +22,9 @@ import IEEE802Linux
 import IORing
 import IORingUtils
 import NetLink
-import struct SystemPackage.Errno
 #endif
 import Synchronization
+import struct SystemPackage.Errno
 
 /// A network port of an ATDECC End Station (IEEE 1722.1-2021 §3.1): the link on which AVTP
 /// frames carrying ADP, AECP and ACMP are sent and received.
@@ -550,13 +550,6 @@ public final class VirtualPort: NetworkPort {
   }
 }
 
-#if os(Linux)
 private var _linkDownError: any Error {
   Errno.networkDown
 }
-#else
-private struct LinkDownError: Error {}
-private var _linkDownError: any Error {
-  LinkDownError()
-}
-#endif

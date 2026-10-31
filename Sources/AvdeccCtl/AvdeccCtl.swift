@@ -77,8 +77,26 @@ public enum AvdeccCtl {
       output.error("avdecc-ctl: cannot open \(name): \(error)")
       return 2
     }
+    #elseif os(macOS)
+    do {
+      // BPF access is enough to receive promiscuously, whereas joining multicast groups needs root
+      let promiscuousPrefix = "promisc:"
+      let isPromiscuous = name.hasPrefix(promiscuousPrefix)
+      return try await run(
+        invocation,
+        on: EthernetPort(
+          interfaceName: isPromiscuous ? String(name.dropFirst(promiscuousPrefix.count)) : name,
+          multicastReception: isPromiscuous ? .promiscuous : .joinGroups
+        ),
+        output: output,
+        logger: logger
+      )
+    } catch {
+      output.error("avdecc-ctl: cannot open \(name): \(error)")
+      return 2
+    }
     #else
-    output.error("avdecc-ctl: the Ethernet, serial and Unix socket ports need Linux")
+    output.error("avdecc-ctl: the Ethernet, serial and Unix socket ports need Linux or macOS")
     return 2
     #endif
   }

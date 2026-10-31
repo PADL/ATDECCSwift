@@ -35,7 +35,11 @@ enum Discovery {
     }
 
     guard CommandLine.arguments.count == 2 else {
+      #if os(macOS)
+      print("Usage: \(CommandLine.arguments[0]) interface|promisc:interface")
+      #else
       print("Usage: \(CommandLine.arguments[0]) interface|/dev/tty[@baud]|unix:path")
+      #endif
       exit(1)
     }
 
@@ -59,13 +63,30 @@ enum Discovery {
       print("discovery failed: \(error)")
       exit(2)
     }
+    #elseif os(macOS)
+    let name = CommandLine.arguments[1]
+    do {
+      // BPF access is enough to receive promiscuously, whereas joining multicast groups needs root
+      let promiscuousPrefix = "promisc:"
+      if name.hasPrefix(promiscuousPrefix) {
+        let interfaceName = String(name.dropFirst(promiscuousPrefix.count))
+        try await discover(on: open(name) {
+          try EthernetPort(interfaceName: interfaceName, multicastReception: .promiscuous)
+        })
+      } else {
+        try await discover(on: open(name) { try EthernetPort(interfaceName: name) })
+      }
+    } catch {
+      print("discovery failed: \(error)")
+      exit(2)
+    }
     #else
     print("the Ethernet, serial and Unix domain socket ports are only available on Linux")
     exit(1)
     #endif
   }
 
-  #if os(Linux)
+  #if os(Linux) || os(macOS)
   private static func open<Port: NetworkPort>(_ name: String, _ port: () throws -> Port) -> Port {
     do {
       return try port()
