@@ -37,7 +37,7 @@ public enum Direction: String, Sendable, Equatable {
 
 /// The options every command takes.
 public struct Options: Sendable, Equatable {
-  /// `eth0`, `unix:/path` or `/dev/tty…[@baud]`.
+  /// `eth0`, `unix:/path` or `/dev/tty…[@baud]`; on macOS `en0` or `promisc:en0`.
   public var port: String?
   /// Bounds the whole command, discovery of its entity included.
   public var timeout: Duration = .seconds(5)
@@ -368,7 +368,8 @@ Commands:
   identify <entity> [--off]                    set the entity's IDENTIFY control
 
 Options:
-  -p, --port <port>          eth0, unix:/run/mediabridge/atdecc.sock, or /dev/ttyAMA0@115200
+  -p, --port <port>          eth0, unix:/run/mediabridge/atdecc.sock, or /dev/ttyAMA0@115200;
+                             on macOS en0, or promisc:en0 unless running as root
   -t, --timeout <seconds>    bound on the whole command, discovery included (default 5)
   --json                     print JSON rather than text
   --controller-id <id>       this controller's entity ID (default: the port's MAC address
