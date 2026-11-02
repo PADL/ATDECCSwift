@@ -14,6 +14,12 @@
 // limitations under the License.
 //
 
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
+
 import BinaryParsing
 import IEEE802
 import Logging
@@ -44,6 +50,17 @@ private let _ethernetMinimumPayloadLength = 46
 private let _receiveRetryDelay = Duration.milliseconds(100)...Duration.seconds(5)
 // The program-specific part of a dynamic entity ID; 0 and 0xFFFF are avoided.
 private let _dynamicEntityIDRange: ClosedRange<UInt16> = 1...0xFFFD
+// Coprime to the range's 65533 (13 * 71 * 71) values, so that it permutes them.
+private let _processIDMultiplier: UInt64 = 0x9E37
+
+/// The program-specific part of the first dynamic entity ID a process with `processID` makes.
+/// Processes whose IDs differ modulo 65533 get different values, so that controllers in
+/// different processes sharing a MAC address have unique IDs (IEEE 1722.1-2021 §6.2.1.8).
+public func dynamicEntityProgramID(processID: Int32) -> UInt16 {
+  let count = UInt64(_dynamicEntityIDRange.count)
+  let index = (UInt64(UInt32(bitPattern: processID)) % count * _processIDMultiplier) % count
+  return _dynamicEntityIDRange.lowerBound + UInt16(index)
+}
 
 /// An ATDECC End Station (IEEE 1722.1-2021 §3.1): a device with a network port and the
 /// ATDECC entities on it. The end station sends and receives AVDECC PDUs on the port and
@@ -92,16 +109,23 @@ public actor EndStation<Port: NetworkPort> {
   // MARK: - Entity IDs
 
   /// Returns an entity ID derived from the port's MAC address (IEEE 1722.1-2021 §6.2.1.8)
-  /// that no other dynamic ID on this end station is using. Release it with
+  /// that no other dynamic ID on this end station is using: the first free program ID from
+  /// `dynamicEntityProgramID(processID:)` upward. IDs are unique across end stations on one
+  /// port only if a process has one end station per port. Release it with
   /// `releaseDynamicEntityID(_:)`.
   public func makeDynamicEntityID() throws -> UniqueIdentifier {
+    try makeDynamicEntityID(startingAt: dynamicEntityProgramID(processID: getpid()))
+  }
+
+  func makeDynamicEntityID(startingAt firstProgramID: UInt16) throws -> UniqueIdentifier {
     guard _dynamicEntityIDs.count < _dynamicEntityIDRange.count else {
       throw EndStationError.noDynamicEntityIDAvailable
     }
-    var programID: UInt16
-    repeat {
-      programID = UInt16.random(in: _dynamicEntityIDRange)
-    } while _dynamicEntityIDs.contains(programID)
+    var programID = firstProgramID
+    while _dynamicEntityIDs.contains(programID) {
+      programID = programID == _dynamicEntityIDRange.upperBound
+        ? _dynamicEntityIDRange.lowerBound : programID + 1
+    }
     _dynamicEntityIDs.insert(programID)
     return UniqueIdentifier((UInt64(eui48: macAddress) << 16) | UInt64(programID))
   }

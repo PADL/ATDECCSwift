@@ -15,6 +15,7 @@
 //
 
 import ATDECC
+import IEEE802
 
 /// A command line that cannot be run; exits with status 2.
 public struct UsageError: Error, Equatable, CustomStringConvertible {
@@ -43,16 +44,21 @@ public struct Options: Sendable, Equatable {
   public var timeout: Duration = .seconds(5)
   public var json = false
   public var verbose = false
-  /// The controller's entity ID, by default the port's MAC address followed by
-  /// `controllerProgramID`,
-  /// so that successive invocations are the same controller to an entity they acquired.
+  /// The controller's entity ID, by default `defaultControllerID(macAddress:processID:)`;
+  /// set it to be the same controller in successive invocations, as to release an acquisition.
   public var controllerID: UniqueIdentifier?
 
   public init() {}
 }
 
-/// The lower 16 bits of the default controller entity ID.
-public let controllerProgramID: UInt16 = 0xC71D
+/// The default controller entity ID: the port's MAC address followed by a program ID derived
+/// from the process ID, so that concurrent invocations sharing a port's MAC address (all of
+/// those on a Unix socket) are different controllers (IEEE 1722.1-2021 §6.2.1.8).
+public func defaultControllerID(macAddress: EUI48, processID: Int32) -> UniqueIdentifier {
+  UniqueIdentifier(
+    UInt64(eui48: macAddress) << 16 | UInt64(dynamicEntityProgramID(processID: processID))
+  )
+}
 
 /// A subcommand and its arguments.
 public enum Command: Sendable, Equatable {
@@ -373,7 +379,8 @@ Options:
   -t, --timeout <seconds>    bound on the whole command, discovery included (default 5)
   --json                     print JSON rather than text
   --controller-id <id>       this controller's entity ID (default: the port's MAC address
-                             followed by c71d, the same in every invocation)
+                             followed by an ID derived from the process ID); give the same
+                             one to release, in a later invocation, what acquire acquired
   -v, --verbose              log the protocol
   -h, --help
 

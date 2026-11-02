@@ -16,6 +16,7 @@
 
 import ATDECC
 @testable import AvdeccCtl
+import IEEE802
 import XCTest
 
 final class ArgumentTests: XCTestCase {
@@ -71,6 +72,15 @@ final class ArgumentTests: XCTestCase {
     XCTAssertEqual(invocation.options.timeout, .seconds(5))
     XCTAssertFalse(invocation.options.json)
     XCTAssertNil(invocation.options.controllerID)
+  }
+
+  func testDefaultControllerIDDependsOnTheProcessID() {
+    let macAddress: EUI48 = [0x0A, 0xE9, 0x1B, 0x01, 0x01, 0x01]
+    let first = defaultControllerID(macAddress: macAddress, processID: 1234)
+    XCTAssertEqual(first.rawValue >> 16, 0x0AE9_1B01_0101)
+    XCTAssertEqual(first, defaultControllerID(macAddress: macAddress, processID: 1234))
+    XCTAssertNotEqual(first, defaultControllerID(macAddress: macAddress, processID: 1235))
+    XCTAssertNotEqual(first, defaultControllerID(macAddress: macAddress, processID: 1234 + 0x10000))
   }
 
   func testHelp() throws {

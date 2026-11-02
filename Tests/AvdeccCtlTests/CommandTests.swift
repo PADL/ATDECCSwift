@@ -14,6 +14,12 @@
 // limitations under the License.
 //
 
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
+
 @testable import ATDECC
 @testable import AvdeccCtl
 import IEEE802
@@ -362,13 +368,14 @@ final class CommandTests: XCTestCase {
   // MARK: - Entity commands
 
   func testAcquireLockAndRelease() async throws {
+    let controllerID = defaultControllerID(macAddress: controllerMacAddress, processID: getpid())
     var (status, out, _) = try await run("acquire \(id)")
     XCTAssertEqual(status, 0)
-    XCTAssertTrue(out.contains("owner id: 0x020000000001c71d"), out)
-    // the same controller ID in the next invocation
+    XCTAssertTrue(out.contains("owner id: 0x\(controllerID)"), out)
+    // the same controller ID in the next invocation in this process
     (status, _, _) = try await run("lock \(id)")
     XCTAssertEqual(status, 0)
-    XCTAssertEqual(entity.state.withLock(\.lockedBy), UniqueIdentifier(0x0200_0000_0001_C71D))
+    XCTAssertEqual(entity.state.withLock(\.lockedBy), controllerID)
 
     // another controller is refused
     var err: String

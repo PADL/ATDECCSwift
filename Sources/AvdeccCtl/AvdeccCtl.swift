@@ -14,6 +14,12 @@
 // limitations under the License.
 //
 
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
+
 import ATDECC
 import IEEE802
 import Logging
@@ -111,7 +117,7 @@ public enum AvdeccCtl {
   ) async -> Int32 {
     let endStation = EndStation(port: port, logger: logger)
     let controllerID = invocation.options.controllerID ??
-      UniqueIdentifier(UInt64(eui48: port.macAddress) << 16 | UInt64(controllerProgramID))
+      defaultControllerID(macAddress: port.macAddress, processID: getpid())
     let controller: Controller<Port>
     do {
       controller = try await Controller(

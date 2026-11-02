@@ -232,9 +232,10 @@ which is also how formats are printed: `aaf,48k,int32/24,8ch,6spf` (rate, sample
 an optional bit depth, channels, samples per frame, optionally `ut`), `crf,48k` (optionally
 `interval=`, `tpp=`, `type=`, `pull=`) or `iec61883-6,48k,8ch` (AM824).
 
-The controller's entity ID is the port's MAC address followed by `c71d` unless `--controller-id`
-says otherwise, so successive invocations are the same controller: an entity acquired by
-`acquire` stays acquired by `avdecc-ctl` until `release`.
+The controller's entity ID is the port's MAC address followed by a program ID derived from the
+process ID, unless `--controller-id` says otherwise, so that concurrent invocations are different
+controllers even on a Unix socket, where every client has the same MAC address. To `release` or
+`unlock` in a later invocation what `acquire` or `lock` took, give both the same `--controller-id`.
 
 The exit status is 0 on success; 1 when an entity answers with a failure status, which is
 printed (`SET_STREAM_FORMAT failed: ACQUIRED_BY_OTHER`); and 2 for a usage error, a timeout or a
