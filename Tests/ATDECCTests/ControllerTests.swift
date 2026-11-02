@@ -14,6 +14,12 @@
 // limitations under the License.
 //
 
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
+
 @testable import ATDECC
 import BinaryParsing
 import IEEE802
@@ -449,6 +455,42 @@ final class ControllerTests: XCTestCase {
       try await endStation.releaseDynamicEntityID(id)
       XCTFail("released an unissued entity ID")
     } catch EndStationError.invalidDynamicEntityID {}
+  }
+
+  func testDynamicEntityIDsAreUniqueAndInRange() async throws {
+    let endStation = EndStation(port: network.makePort(macAddress: controllerMacAddress))
+    var programIDs = Set<UInt64>()
+    for _ in 0..<1000 {
+      let id = try await endStation.makeDynamicEntityID()
+      XCTAssertEqual(id.rawValue >> 16, 0x0200_0000_0001)
+      programIDs.insert(id.rawValue & 0xFFFF)
+    }
+    XCTAssertEqual(programIDs.count, 1000)
+    XCTAssertTrue(programIDs.allSatisfy { 1...0xFFFD ~= $0 })
+  }
+
+  func testDynamicEntityIDsStartFromTheProcessID() async throws {
+    let endStation = EndStation(port: network.makePort(macAddress: controllerMacAddress))
+    let id = try await endStation.makeDynamicEntityID()
+    XCTAssertEqual(id.rawValue & 0xFFFF, UInt64(dynamicEntityProgramID(processID: getpid())))
+    try await endStation.releaseDynamicEntityID(id)
+    let again = try await endStation.makeDynamicEntityID()
+    XCTAssertEqual(again, id)
+  }
+
+  func testDynamicEntityIDsWrapAroundTheRange() async throws {
+    let endStation = EndStation(port: network.makePort(macAddress: controllerMacAddress))
+    var programIDs = [UInt64]()
+    for _ in 0..<3 {
+      programIDs.append(try await endStation.makeDynamicEntityID(startingAt: 0xFFFD).rawValue & 0xFFFF)
+    }
+    XCTAssertEqual(programIDs, [0xFFFD, 1, 2])
+  }
+
+  func testDynamicEntityProgramIDsDifferByProcess() {
+    let programIDs = (Int32(1)...65533).map { dynamicEntityProgramID(processID: $0) }
+    XCTAssertEqual(Set(programIDs).count, 65533)
+    XCTAssertTrue(programIDs.allSatisfy { 1...0xFFFD ~= $0 })
   }
 
   // MARK: - AEM
