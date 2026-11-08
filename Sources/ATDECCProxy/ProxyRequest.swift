@@ -68,8 +68,8 @@ public func appVerdict(on head: AppHTTPRequestHead, allowedWebSocketOrigins: [St
     return AppRequestVerdict(requestValid: 200, transport: .connect, extraHeaders: [])
   }
   let path = head.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? head.target
-  guard path == AppWebSocketPath else { return .refused(head.method == "GET" ? 404 : 405) }
-  guard head.method == "GET" else { return .refused(405) }
+  guard path == AppWebSocketPath else { return .refused(404) }
+  guard head.method == "GET" else { return .refused(405, ["Allow: GET"]) }
   return webSocketVerdict(on: head, allowedOrigins: allowedWebSocketOrigins)
 }
 

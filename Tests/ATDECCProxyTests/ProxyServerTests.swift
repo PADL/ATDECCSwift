@@ -39,8 +39,11 @@ private final class TestApc {
   private var messages = [WebSocketMessage]()
   private let mask: [UInt8] = [0x12, 0x34, 0x56, 0x78]
 
-  init(port: UInt16) async throws {
+  init(port: UInt16, receiveBufferSize: CInt? = nil) async throws {
     socket = try Socket(ring: .shared, domain: sa_family_t(AF_INET), type: SOCK_STREAM, protocol: 0)
+    if let receiveBufferSize {
+      try socket.setIntegerOption(option: SO_RCVBUF, to: receiveBufferSize)
+    }
     try await socket.connect(to: sockaddr_in(family: sa_family_t(AF_INET), presentationAddress: "127.0.0.1:\(port)"))
   }
 
@@ -95,6 +98,18 @@ private final class TestApc {
     return try Appdu(bytes: payload)
   }
 
+  /// The WebSocket close status of the next message, which must be a close frame.
+  func readCloseCode() async throws -> UInt16? {
+    while true {
+      let bytes = try await socket.receive(count: 4096, timeout: timeout)
+      guard !bytes.isEmpty else { return nil }
+      buffer += bytes
+      guard buffer.count >= 4 else { continue }
+      XCTAssertEqual(buffer[0], 0x88)
+      return UInt16(buffer[2]) << 8 | UInt16(buffer[3])
+    }
+  }
+
   /// Reads until the server closes the connection.
   func readToEnd() async throws -> [UInt8] {
     var all = buffer
@@ -125,8 +140,17 @@ final class ProxyServerTests: XCTestCase {
     _ = await serverTask.result
   }
 
-  private func startServer(maximumConnections: Int) throws {
-    let configuration = AtdeccProxyServerConfiguration(port: 0, maximumConnections: maximumConnections)
+  private func startServer(
+    maximumConnections: Int,
+    requestTimeout: Duration = .seconds(10),
+    writeTimeout: Duration = .seconds(10)
+  ) throws {
+    let configuration = AtdeccProxyServerConfiguration(
+      port: 0,
+      maximumConnections: maximumConnections,
+      requestTimeout: requestTimeout,
+      writeTimeout: writeTimeout
+    )
     let network = network!
     server = try AtdeccProxyServer(configuration: configuration, linkMacAddress: linkMacAddress, logger: Logger(label: "test")) {
       [connectionPorts] in
@@ -251,6 +275,9 @@ final class ProxyServerTests: XCTestCase {
     try await apc.send(webSocketFrame(.close, [0x03, 0xE8], maskingKey: [1, 2, 3, 4]))
     let awaited6 = try await apc.readMessage()
     XCTAssertEqual(awaited6, .close)
+    // one close frame in answer, then the end of the connection
+    let rest = try await apc.readToEnd()
+    XCTAssertEqual(rest, [])
   }
 
   func testAWebSocketFromAForeignOriginIsRefused() async throws {
@@ -296,6 +323,89 @@ final class ProxyServerTests: XCTestCase {
       let awaited10 = try await apc.readAppdu().messageType
       XCTAssertEqual(awaited10, .atdeccFromAps)
     }
+  }
+
+  private func upgrade(_ apc: TestApc) async throws {
+    var upgrade = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:\(server.port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+    upgrade += "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    try await apc.send(Array(upgrade.utf8))
+    _ = try await apc.readHead()
+    _ = try await apc.readMessageAppdu()
+  }
+
+  func testATextMessageClosesTheWebSocketWith1003() async throws {
+    let apc = try await TestApc(port: server.port)
+    try await upgrade(apc)
+    try await apc.send(webSocketFrame(.text, Array("hello".utf8), maskingKey: [1, 2, 3, 4]))
+    let code = try await apc.readCloseCode()
+    XCTAssertEqual(code, 1003)
+  }
+
+  func testARequestDribbledPastItsDeadlineIsDropped() async throws {
+    serverTask.cancel()
+    _ = await serverTask.result
+    try startServer(maximumConnections: 8, requestTimeout: .milliseconds(300))
+    let apc = try await TestApc(port: server.port)
+    let start = ContinuousClock.now
+    var closed = false
+    for byte in "CONNECT / HTTP/1.1\r\nHost: 127.0.0.1\r\n".utf8 {
+      do {
+        try await apc.send([byte])
+      } catch {
+        closed = true
+        break
+      }
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    if !closed {
+      let rest = try await apc.readToEnd()
+      XCTAssertEqual(rest, [])
+    }
+    XCTAssertLessThan(ContinuousClock.now - start, .seconds(3))
+  }
+
+  func testAConnectionThatHasNotSentItsRequestUsesNoSlot() async throws {
+    serverTask.cancel()
+    _ = await serverTask.result
+    try startServer(maximumConnections: 1)
+    let idle = try await TestApc(port: server.port)
+    let apc = try await TestApc(port: server.port)
+    try await apc.send(appConnectRequest(host: "127.0.0.1", port: server.port).serialized())
+    let head = try await apc.readHead()
+    XCTAssertEqual(head, "HTTP/1.1 200 OK\r\n\r\n")
+    _ = idle
+  }
+
+  func testAnEntityIDAdvertisedOnTheLanIsNotAssigned() async throws {
+    let lanID = UniqueIdentifier(0x0200_00FF_FE00_0042)
+    let apc = try await TestApc(port: server.port)
+    try await apc.send(appConnectRequest(host: "127.0.0.1", port: server.port).serialized())
+    _ = try await apc.readHead()
+    _ = try await apc.readAppdu()
+    try await entitySends(makeAdpdu(entityID: lanID.rawValue))
+    let advertisement = try await apc.readAppdu()
+    XCTAssertEqual(advertisement.messageType, .atdeccFromAps)
+    try await apc.send(Appdu.entityIDRequest(apcMacAddress: apcMacAddress, entityID: lanID).serialized())
+    let response = try await apc.readAppdu()
+    XCTAssertNotEqual(response.entityID, lanID)
+  }
+
+  func testAnApcThatStopsReadingIsDisconnected() async throws {
+    serverTask.cancel()
+    _ = await serverTask.result
+    try startServer(maximumConnections: 8, writeTimeout: .milliseconds(500))
+    let apc = try await TestApc(port: server.port, receiveBufferSize: 2048)
+    try await apc.send(appConnectRequest(host: "127.0.0.1", port: server.port).serialized())
+    _ = try await apc.readHead()
+    // the APC reads nothing more while the LAN floods it
+    for _ in 0..<4000 {
+      try await entitySends(makeAvtpdu())
+    }
+    try await Task.sleep(for: .seconds(2))
+    // what was buffered, then the end of the connection rather than a timeout
+    let start = ContinuousClock.now
+    _ = try await apc.readToEnd()
+    XCTAssertLessThan(ContinuousClock.now - start, .seconds(4))
   }
 
   func testTheLinkGoingDownIsReported() async throws {

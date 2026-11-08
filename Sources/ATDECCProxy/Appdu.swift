@@ -126,7 +126,8 @@ public struct Appdu: Sendable, CustomStringConvertible {
     return UniqueIdentifier(payload.reduce(UInt64(0)) { $0 << 8 | UInt64($1) })
   }
 
-  /// The APPDU's octets. The payload must not exceed `maximumPayloadLength`.
+  /// The APPDU's octets. The payload must not exceed `maximumPayloadLength`: what arrives from
+  /// the LAN is checked before it is put in an APPDU.
   public func serialized() -> [UInt8] {
     precondition(payload.count <= Self.maximumPayloadLength)
     var bytes = [UInt8]()
@@ -220,15 +221,6 @@ public let AppAvtpduSubtypes: ClosedRange<UInt8> = AvtpSubtype.adp.rawValue...Av
 public func isAppAvtpdu(_ avtpdu: some Collection<UInt8>) -> Bool {
   guard avtpdu.count >= AvtpduControlHeader.length, let subtype = avtpdu.first else { return false }
   return AppAvtpduSubtypes.contains(subtype)
-}
-
-/// `payload`, a received Ethernet payload, without the padding that follows its AVTPDU: the
-/// AVTP control header and control_data_length octets (IEEE 1722-2016 Clause 4.4.3).
-public func avtpdu(trimming payload: [UInt8]) -> [UInt8] {
-  guard payload.count >= AvtpduControlHeader.length else { return payload }
-  let controlDataLength = (Int(payload[2]) << 8 | Int(payload[3])) & 0x07FF
-  let length = AvtpduControlHeader.length + controlDataLength
-  return length < payload.count ? Array(payload.prefix(length)) : payload
 }
 
 extension UInt64 {

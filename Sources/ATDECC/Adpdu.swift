@@ -89,6 +89,11 @@ public struct Adpdu: Sendable, Hashable {
 }
 
 extension Adpdu: SerDes {
+  /// Parses an ADPDU from `bytes`, an AVTPDU.
+  public init(bytes: [UInt8]) throws {
+    self = try bytes.withParserSpan { try Adpdu(parsing: &$0) }
+  }
+
   public init(parsing input: inout ParserSpan) throws {
     let header = try input.parseAvtpduControlHeader(
       subtype: .adp,

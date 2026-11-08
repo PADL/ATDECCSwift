@@ -22,9 +22,9 @@
 public struct AppChannelReader: Sendable {
   public enum Item: Sendable {
     case appdu(Appdu)
-    /// Octets to send back: a pong, or the reply to a close.
+    /// Octets to send back: a pong.
     case reply([UInt8])
-    /// The APC closed the WebSocket.
+    /// The APC closed the WebSocket; the connection answers with its own close.
     case closed
   }
 
@@ -32,6 +32,16 @@ public struct AppChannelReader: Sendable {
     case appdu(AppduError)
     case webSocket(WebSocketError)
     case textMessage
+
+    /// The WebSocket close status to fail the connection with (RFC 6455 Section 7.4.1).
+    public var webSocketCloseCode: UInt16 {
+      switch self {
+      case .textMessage: 1003
+      case .webSocket(.messageTooLong): 1009
+      case .webSocket: 1002
+      case .appdu: 1007
+      }
+    }
   }
 
   private let isWebSocket: Bool
@@ -57,7 +67,7 @@ public struct AppChannelReader: Sendable {
       case .text: throw .textMessage
       case let .ping(payload): items.append(.reply(webSocketFrame(.pong, payload)))
       case .pong: break
-      case .close: return items + [.reply(webSocketFrame(.close, [0x03, 0xE8])), .closed]
+      case .close: return items + [.closed]
       }
     }
     return items

@@ -108,10 +108,12 @@ final class AppduTests: XCTestCase {
     XCTAssertFalse(isAppAvtpdu([0xFA, 0, 0]))
   }
 
-  func testEthernetPaddingIsTrimmedFromAvtpdus() {
+  func testEthernetPaddingIsTrimmedFromAvtpdus() throws {
     let acmpdu = makeAvtpdu(subtype: 0xFC, controlDataLength: 44)
-    XCTAssertEqual(avtpdu(trimming: acmpdu + [0, 0, 0]), acmpdu)
-    XCTAssertEqual(avtpdu(trimming: acmpdu), acmpdu)
+    XCTAssertEqual(try avtpdu(withoutPaddingFrom: acmpdu + [0, 0, 0]), acmpdu)
+    XCTAssertEqual(try avtpdu(withoutPaddingFrom: acmpdu), acmpdu)
+    XCTAssertThrowsError(try avtpdu(withoutPaddingFrom: Array(acmpdu.prefix(40))))
+    XCTAssertThrowsError(try avtpdu(withoutPaddingFrom: makeAvtpdu(controlDataLength: 1500)))
   }
 
   func testServiceRecordFollowsTableC2() {
@@ -155,7 +157,10 @@ final class AppHTTPTests: XCTestCase {
 
   func testOtherRequestsAreRefused() {
     XCTAssertEqual(appVerdict(on: head("GET / HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 404)
-    XCTAssertEqual(appVerdict(on: head("POST /ws HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 405)
+    let post = appVerdict(on: head("POST /ws HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: [])
+    XCTAssertEqual(post.requestValid, 405)
+    XCTAssertTrue(String(decoding: post.response, as: UTF8.self).contains("\r\nAllow: GET\r\n"))
+    XCTAssertEqual(appVerdict(on: head("POST / HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 404)
     XCTAssertEqual(appVerdict(on: head("CONNECT / HTTP/2.0\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 505)
     XCTAssertEqual(appVerdict(on: head("GET /ws HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 426)
     let refusal = String(decoding: appVerdict(on: head("GET / HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).response, as: UTF8.self)
@@ -249,6 +254,13 @@ final class WebSocketFrameTests: XCTestCase {
     let pingItems = try reader.read(webSocketFrame(.ping, [7], maskingKey: mask))
     guard case let .reply(pong) = pingItems.first else { return XCTFail("no pong") }
     XCTAssertEqual(pong, [0x8A, 0x01, 0x07])
-    XCTAssertThrowsError(try reader.read(webSocketFrame(.text, [0x41], maskingKey: mask)))
+    // a close is answered by the connection, once, not by the reader
+    let closeItems = try reader.read(webSocketFrame(.close, [0x03, 0xE8], maskingKey: mask))
+    XCTAssertEqual(closeItems.count, 1)
+    guard case .closed = closeItems.first else { return XCTFail("no close") }
+    var other = AppChannelReader(transport: .webSocket(key: "k"))
+    XCTAssertThrowsError(try other.read(webSocketFrame(.text, [0x41], maskingKey: mask))) {
+      XCTAssertEqual(($0 as? AppChannelReader.Error)?.webSocketCloseCode, 1003)
+    }
   }
 }

@@ -17,6 +17,7 @@
 import ATDECC
 import ATDECCProxy
 import IEEE802
+import Synchronization
 import XCTest
 
 private typealias Action = AtdeccProxyServerStateMachine.Action
@@ -179,10 +180,23 @@ final class ProxyServerStateMachineTests: XCTestCase {
     XCTAssertEqual(entityIDs.assign(entityIDs.makeConnection(), requested: requested), requested)
   }
 
-  func testAMulticastApcAddressClosesTheConnection() {
+  func testAnyApcAddressIsEchoedAndAnEntityIDAssigned() {
     var machine = makeTransferring()
     let actions = machine.apcMessageReceived(.entityIDRequest(apcMacAddress: AvdeccMulticastMacAddress, entityID: UniqueIdentifier()), at: 1)
-    XCTAssertEqual(describe(actions), ["close"])
+    XCTAssertEqual(describe(actions), ["apc ENTITY_ID_RESPONSE \(_macAddressToString(AvdeccMulticastMacAddress)) 8"])
+  }
+
+  func testAFrameTooLongForAnAppduIsDropped() {
+    var machine = makeTransferring()
+    let jumbo = IEEE802Packet(
+      destMacAddress: AvdeccMulticastMacAddress,
+      tci: nil,
+      sourceMacAddress: entityMacAddress,
+      etherType: AvtpEtherType,
+      payload: makeAvtpdu(subtype: 0xFB, controlDataLength: 1600)
+    )
+    XCTAssertTrue(machine.layer2FrameReceived(jumbo, at: 1).isEmpty)
+    XCTAssertEqual(machine.state, .waiting)
   }
 
   func testLinkChangesAreReportedOnce() {
@@ -213,4 +227,87 @@ final class ProxyServerStateMachineTests: XCTestCase {
     XCTAssertTrue(machine.close().isEmpty)
     XCTAssertTrue(machine.timeAdvanced(to: 100).isEmpty)
   }
+}
+
+/// An ADPDU for `entityID`: ENTITY_AVAILABLE (0) or ENTITY_DEPARTING (1), with valid_time in
+/// units of 2 seconds (IEEE 1722.1-2021 Clause 6.2.1.6).
+func makeAdpdu(entityID: UInt64, messageType: UInt8 = 0, validTime: UInt8 = 5) -> [UInt8] {
+  var bytes: [UInt8] = [AvtpSubtype.adp.rawValue, messageType, validTime << 3, 56]
+  bytes += (0..<8).map { UInt8(truncatingIfNeeded: entityID >> (56 - 8 * $0)) }
+  return bytes + [UInt8](repeating: 0, count: 56)
+}
+
+final class EntityIDTrackingTests: XCTestCase {
+  private let clock = FakeClock()
+  private var entityIDs: AtdeccProxyEntityIDs!
+  private let lanID = UniqueIdentifier(0x0200_00FF_FE00_0042)
+
+  override func setUp() {
+    entityIDs = AtdeccProxyEntityIDs(linkMacAddress: linkMacAddress, processID: 1234) { [clock] in clock.now.withLock { $0 } }
+  }
+
+  private func advance(to time: UInt64) { clock.now.withLock { $0 = time } }
+
+  func testAnIDAdvertisedOnTheLanIsNotAssigned() {
+    entityIDs.noteReceived(makeAdpdu(entityID: lanID.rawValue))
+    let connection = entityIDs.makeConnection()
+    let id = entityIDs.assign(connection, requested: lanID)
+    XCTAssertNotEqual(id, lanID)
+    XCTAssertEqual(id!.rawValue >> 16, UInt64(eui48: linkMacAddress))
+  }
+
+  func testAnAdvertisementExpiresWithItsValidTime() {
+    entityIDs.noteReceived(makeAdpdu(entityID: lanID.rawValue, validTime: 5))
+    let connection = entityIDs.makeConnection()
+    advance(to: 9)
+    XCTAssertTrue(entityIDs.isInUse(lanID, for: connection))
+    advance(to: 10)
+    XCTAssertFalse(entityIDs.isInUse(lanID, for: connection))
+    XCTAssertEqual(entityIDs.assign(connection, requested: lanID), lanID)
+  }
+
+  func testADepartingEntityIsForgotten() {
+    entityIDs.noteReceived(makeAdpdu(entityID: lanID.rawValue))
+    entityIDs.noteReceived(makeAdpdu(entityID: lanID.rawValue, messageType: 1))
+    XCTAssertEqual(entityIDs.assign(entityIDs.makeConnection(), requested: lanID), lanID)
+  }
+
+  func testAnApcsOwnAdvertisementDoesNotCountAgainstIt() {
+    let own = entityIDs.makeConnection()
+    let other = entityIDs.makeConnection()
+    entityIDs.noteSent(makeAdpdu(entityID: lanID.rawValue), by: own)
+    // heard again through the other connection's port, as the egress tap delivers it
+    entityIDs.noteReceived(makeAdpdu(entityID: lanID.rawValue))
+    XCTAssertFalse(entityIDs.isInUse(lanID, for: own))
+    XCTAssertTrue(entityIDs.isInUse(lanID, for: other))
+    XCTAssertEqual(entityIDs.assign(own, requested: lanID), lanID)
+  }
+
+  func testAReconnectingApcKeepsItsID() {
+    let first = entityIDs.makeConnection()
+    XCTAssertEqual(entityIDs.assign(first, requested: lanID), lanID)
+    entityIDs.noteSent(makeAdpdu(entityID: lanID.rawValue), by: first)
+    entityIDs.release(first)
+    XCTAssertEqual(entityIDs.assign(entityIDs.makeConnection(), requested: lanID), lanID)
+  }
+
+  func testAnIDTheApcHoldsDoesNotCountAgainstIt() {
+    let connection = entityIDs.makeConnection()
+    XCTAssertEqual(entityIDs.assign(connection, requested: lanID), lanID)
+    entityIDs.noteReceived(makeAdpdu(entityID: lanID.rawValue))
+    XCTAssertEqual(entityIDs.assign(connection, requested: lanID), lanID)
+  }
+
+  func testDerivedIDsAvoidThoseOnTheLan() {
+    let probe = entityIDs.makeConnection()
+    let derived = entityIDs.assign(probe, requested: UniqueIdentifier())!
+    entityIDs.release(probe)
+    entityIDs.noteReceived(makeAdpdu(entityID: derived.rawValue))
+    XCTAssertNotEqual(entityIDs.assign(entityIDs.makeConnection(), requested: UniqueIdentifier()), derived)
+  }
+}
+
+/// Seconds, set by the test.
+final class FakeClock: Sendable {
+  let now = Mutex<UInt64>(0)
 }

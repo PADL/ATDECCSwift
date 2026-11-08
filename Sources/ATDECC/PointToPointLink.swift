@@ -138,7 +138,7 @@ final class PointToPointLink: Sendable {
   /// Sends a frame once those queued before it are written. Cancelling the send abandons the
   /// frame, even part-way through writing it.
   func send(_ packet: IEEE802Packet) async throws {
-    let avtpdu = try _avtpdu(packet.payload)
+    let avtpdu = try ATDECC.avtpdu(withoutPaddingFrom: packet.payload, maximumLength: PointToPointMaximumPayloadLength)
     let frame = switch _framing {
     case .cobs: [Cobs.delimiter] + Cobs.encode(avtpdu) + [Cobs.delimiter]
     case .datagram: avtpdu
@@ -211,16 +211,6 @@ final class PointToPointLink: Sendable {
 }
 
 private let _cobsReadLength = 256
-
-// The AVTPDU without any Ethernet padding, which a point-to-point link does not carry.
-private func _avtpdu(_ payload: [UInt8]) throws -> [UInt8] {
-  let header = try payload.withParserSpan { try AvtpduControlHeader(parsing: &$0) }
-  let length = AvtpduControlHeader.length + Int(header.controlDataLength)
-  guard length <= payload.count, length <= PointToPointMaximumPayloadLength else {
-    throw AvdeccCodecError.invalidControlDataLength(header.controlDataLength)
-  }
-  return Array(payload.prefix(length))
-}
 
 extension Errno {
   /// An interrupted system call, or one that would block, has done nothing and is made again.

@@ -25,47 +25,126 @@ import IEEE802
 import Synchronization
 
 /// The entity IDs an APS has assigned to its APCs (IEEE 1722.1-2021 Clause C.5.2.2.5), one per
-/// connection. An APC is given the ID it asks for unless another APC of this server holds it;
-/// otherwise, or if it asks for none, one derived from linkMac (Clause C.5.2.1.15) with a
+/// connection, and those ADP shows in use on the LAN.
+///
+/// An APC is given the ID it asks for unless it is known not to be unique: another APC of this
+/// server holds it, or an entity on the LAN advertises it (ENTITY_AVAILABLE, until its
+/// valid_time passes or it departs, IEEE 1722.1-2021 Clause 6.2.1.6). What the requesting
+/// APC itself advertised does not count, so an APC keeps its ID; what an APC advertised is
+/// forgotten when its connection closes, so one that reconnects keeps it too. Otherwise, or
+/// if it asks for none, it is given one derived from linkMac (Clause C.5.2.1.15) with a
 /// program ID (IEEE 1722.1-2021 Clause 6.2.1.8).
 public final class AtdeccProxyEntityIDs: Sendable {
+  /// An entity advertised on the LAN, until `expiry` (seconds on `clock`); `sender` is the
+  /// connection whose APC advertised it, if one did.
+  private struct Advertisement {
+    var expiry: UInt64
+    var sender: Int?
+  }
+
   private struct State {
     var held = [Int: UniqueIdentifier]()
+    var connections = Set<Int>()
     var nextConnection = 0
+    var advertised = [UniqueIdentifier: Advertisement]()
   }
 
   public let linkMacAddress: EUI48
   private let firstProgramID: UInt16
+  private let clock: @Sendable () -> UInt64
   private let state = Mutex(State())
 
   /// Program IDs start half the range away from those `EndStation.makeDynamicEntityID()`
-  /// gives this process, so the APS's IDs keep clear of the host's own controllers.
-  public init(linkMacAddress: EUI48, processID: Int32 = getpid()) {
+  /// gives this process, so the APS's IDs keep clear of the host's own controllers. `clock`
+  /// gives seconds, monotonic; by default from a `ContinuousClock`.
+  public init(
+    linkMacAddress: EUI48,
+    processID: Int32 = getpid(),
+    clock: (@Sendable () -> UInt64)? = nil
+  ) {
     self.linkMacAddress = linkMacAddress
     let start = UInt32(dynamicEntityProgramID(processID: processID)) - 1 + 0x7FFE
     firstProgramID = UInt16(start % 0xFFFD) + 1
+    let origin = ContinuousClock.now
+    self.clock = clock ?? { UInt64(max((ContinuousClock.now - origin).components.seconds, 0)) }
   }
 
   /// A key for one connection's assignments, released with `release(_:)`.
   public func makeConnection() -> Int {
     state.withLock { state in
       defer { state.nextConnection += 1 }
+      state.connections.insert(state.nextConnection)
       return state.nextConnection
     }
   }
 
   /// The ID for `connection`, given the one its APC requested or zero; nil if none is left.
   public func assign(_ connection: Int, requested: UniqueIdentifier) -> UniqueIdentifier? {
-    state.withLock { state in
-      let others = Set(state.held.filter { $0.key != connection }.values)
-      let id = Self.isAssignable(requested) && !others.contains(requested) ? requested : derived(avoiding: others)
+    let now = clock()
+    return state.withLock { state in
+      let inUse = Self.inUse(state, excluding: connection, at: now)
+      let id = Self.isAssignable(requested) && !inUse.contains(requested) ? requested : derived(avoiding: inUse)
       state.held[connection] = id
       return id
     }
   }
 
+  /// Forgets `connection`: the ID it holds and what its APC advertised.
   public func release(_ connection: Int) {
-    _ = state.withLock { $0.held.removeValue(forKey: connection) }
+    state.withLock { state in
+      state.held.removeValue(forKey: connection)
+      state.connections.remove(connection)
+      state.advertised = state.advertised.filter { $0.value.sender != connection }
+    }
+  }
+
+  /// Notes an AVTPDU the APC of `connection` sent to the LAN.
+  public func noteSent(_ avtpdu: [UInt8], by connection: Int) {
+    guard let adpdu = try? Adpdu(bytes: avtpdu) else { return }
+    let now = clock()
+    state.withLock { state in
+      switch adpdu.messageType {
+      case .entityAvailable:
+        state.advertised[adpdu.entityID] = Advertisement(expiry: now + 2 * UInt64(adpdu.validTime), sender: connection)
+      case .entityDeparting:
+        state.advertised.removeValue(forKey: adpdu.entityID)
+      case .entityDiscover:
+        break
+      }
+    }
+  }
+
+  /// Notes an AVTPDU received from the LAN. An advertisement an APC of this server made, heard
+  /// again through another connection's port, stays that APC's.
+  public func noteReceived(_ avtpdu: [UInt8]) {
+    guard let adpdu = try? Adpdu(bytes: avtpdu) else { return }
+    let now = clock()
+    state.withLock { state in
+      switch adpdu.messageType {
+      case .entityAvailable:
+        let sender = state.advertised[adpdu.entityID]?.sender.flatMap { state.connections.contains($0) ? $0 : nil }
+        state.advertised[adpdu.entityID] = Advertisement(expiry: now + 2 * UInt64(adpdu.validTime), sender: sender)
+      case .entityDeparting:
+        state.advertised.removeValue(forKey: adpdu.entityID)
+      case .entityDiscover:
+        break
+      }
+    }
+  }
+
+  /// Whether `id` is known not to be unique for the APC of `connection`.
+  public func isInUse(_ id: UniqueIdentifier, for connection: Int) -> Bool {
+    let now = clock()
+    return state.withLock { Self.inUse($0, excluding: connection, at: now).contains(id) }
+  }
+
+  private static func inUse(_ state: State, excluding connection: Int, at now: UInt64) -> Set<UniqueIdentifier> {
+    var ids = Set(state.held.filter { $0.key != connection }.values)
+    for (id, advertisement) in state.advertised where advertisement.expiry > now && advertisement.sender != connection {
+      ids.insert(id)
+    }
+    ids.subtract(state.held[connection].map { [$0] } ?? [])
+    return ids
   }
 
   private static func isAssignable(_ id: UniqueIdentifier) -> Bool {

@@ -106,11 +106,11 @@ public struct AtdeccProxyServerStateMachine {
     return [.sendToLayer2(packet)]
   }
 
-  /// ASSIGN_ENTITY_ID: sendEntityIdAssignment(a, entity_id) (Clause C.5.2.2.5).
+  /// ASSIGN_ENTITY_ID: sendEntityIdAssignment(a, entity_id) (Clause C.5.2.2.5). The address
+  /// is echoed whatever it is: Clause C.5.2.2.5 defines no refusal, and a browser APC has no
+  /// MAC address of its own to give.
   private mutating func assignEntityIDToApc(_ appdu: Appdu, at currentTime: UInt64) -> [Action] {
-    guard let requested = appdu.entityID, !_isMulticast(macAddress: appdu.address),
-          let entityID = entityIDAssigner(appdu.address, requested)
-    else {
+    guard let requested = appdu.entityID, let entityID = entityIDAssigner(appdu.address, requested) else {
       return close()
     }
     assignedEntityID = entityID
@@ -118,11 +118,16 @@ public struct AtdeccProxyServerStateMachine {
     return [.sendToApc(.entityIDResponse(apcMacAddress: appdu.address, entityID: entityID))]
   }
 
-  /// TRANSFER_TO_APC: L2Msg, for a frame with a Table C.7 subtype (Clause C.5.2.1.11).
+  /// TRANSFER_TO_APC: L2Msg, for a frame with a Table C.7 subtype (Clause C.5.2.1.11), sent
+  /// without its Ethernet padding. A frame whose AVTPDU is malformed or would not fit an APPDU
+  /// (a LAN with a larger MTU) is dropped.
   public mutating func layer2FrameReceived(_ packet: IEEE802Packet, at currentTime: UInt64) -> [Action] {
-    guard state == .waiting, packet.etherType == AvtpEtherType, isAppAvtpdu(packet.payload) else { return [] }
+    guard state == .waiting, packet.etherType == AvtpEtherType, isAppAvtpdu(packet.payload),
+          let avtpdu = try? avtpdu(withoutPaddingFrom: packet.payload, maximumLength: Appdu.maximumPayloadLength)
+    else {
+      return []
+    }
     nopTimeout = currentTime + AppNopInterval
-    let avtpdu = avtpdu(trimming: packet.payload)
     return [.sendToApc(.atdeccFromAps(sourceMacAddress: packet.sourceMacAddress, avtpdu: avtpdu))]
   }
 
