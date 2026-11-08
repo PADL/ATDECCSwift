@@ -1,0 +1,238 @@
+//
+// Copyright (c) 2026 PADL Software Pty Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the License);
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an 'AS IS' BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+import ATDECC
+import IEEE802
+
+/// The APP version this implementation speaks (IEEE 1722.1-2021 Clause C.4.1).
+public let AppVersion: UInt8 = 0
+
+/// The message_type of an APPDU (IEEE 1722.1-2021 Clause C.4.2, Table C.4). Values 0x07 to
+/// 0xFD are reserved.
+public struct AppMessageType: RawRepresentable, Hashable, Sendable, CustomStringConvertible {
+  public let rawValue: UInt8
+
+  public init(rawValue: UInt8) {
+    self.rawValue = rawValue
+  }
+
+  public static let nop = AppMessageType(rawValue: 0x00)
+  public static let entityIDRequest = AppMessageType(rawValue: 0x01)
+  public static let entityIDResponse = AppMessageType(rawValue: 0x02)
+  public static let linkUp = AppMessageType(rawValue: 0x03)
+  public static let linkDown = AppMessageType(rawValue: 0x04)
+  public static let atdeccFromAps = AppMessageType(rawValue: 0x05)
+  public static let atdeccFromApc = AppMessageType(rawValue: 0x06)
+  public static let vendor = AppMessageType(rawValue: 0xFF)
+
+  public var description: String {
+    switch self {
+    case .nop: "NOP"
+    case .entityIDRequest: "ENTITY_ID_REQUEST"
+    case .entityIDResponse: "ENTITY_ID_RESPONSE"
+    case .linkUp: "LINK_UP"
+    case .linkDown: "LINK_DOWN"
+    case .atdeccFromAps: "ATDECC_FROM_APS"
+    case .atdeccFromApc: "ATDECC_FROM_APC"
+    case .vendor: "VENDOR"
+    default: "RESERVED(0x\(String(rawValue, radix: 16)))"
+    }
+  }
+}
+
+/// Why bytes are not an APPDU.
+public enum AppduError: Error, Equatable, Sendable {
+  /// The version field is not one this implementation speaks (Clause C.4.1).
+  case unsupportedVersion(UInt8)
+  /// payload_length exceeds 1500 (Clause C.4.3).
+  case payloadTooLong(Int)
+  /// A message whose payload has a fixed length has another (Clause C.4.5, Table C.6).
+  case invalidPayloadLength(AppMessageType, Int)
+  /// Fewer octets than the header and its payload.
+  case truncated
+}
+
+/// An ATDECC Proxy Protocol data unit (IEEE 1722.1-2021 Clause C.4, Figure C.1): a 12-octet
+/// header, then up to 1500 octets of payload.
+public struct Appdu: Sendable, CustomStringConvertible {
+  public static let headerLength = 12
+  public static let maximumPayloadLength = 1500
+
+  public var version: UInt8
+  public var messageType: AppMessageType
+  /// What the address means depends on the message type (Clause C.4.4, Table C.5).
+  public var address: EUI48
+  public var payload: [UInt8]
+
+  public init(
+    version: UInt8 = AppVersion,
+    messageType: AppMessageType,
+    address: EUI48 = [0, 0, 0, 0, 0, 0],
+    payload: [UInt8] = []
+  ) {
+    self.version = version
+    self.messageType = messageType
+    self.address = address
+    self.payload = payload
+  }
+
+  /// A NOP (Clause C.5.1.1).
+  public static var nop: Appdu { Appdu(messageType: .nop) }
+
+  /// An ENTITY_ID_REQUEST from an APC whose primary MAC address is `apcMacAddress`, for
+  /// `entityID`, or zero for none (Clause C.5.1.2).
+  public static func entityIDRequest(apcMacAddress: EUI48, entityID: UniqueIdentifier) -> Appdu {
+    Appdu(messageType: .entityIDRequest, address: apcMacAddress, payload: entityID.rawValue.bigEndianBytes)
+  }
+
+  /// An ENTITY_ID_RESPONSE assigning `entityID` to the APC at `apcMacAddress` (Clause C.5.1.3).
+  public static func entityIDResponse(apcMacAddress: EUI48, entityID: UniqueIdentifier) -> Appdu {
+    Appdu(messageType: .entityIDResponse, address: apcMacAddress, payload: entityID.rawValue.bigEndianBytes)
+  }
+
+  /// LINK_UP or LINK_DOWN for the network port at `linkMacAddress` (Clauses C.5.1.4, C.5.1.5).
+  public static func linkStatus(_ isUp: Bool, linkMacAddress: EUI48) -> Appdu {
+    Appdu(messageType: isUp ? .linkUp : .linkDown, address: linkMacAddress)
+  }
+
+  /// ATDECC_FROM_APS carrying `avtpdu`, received from `sourceMacAddress` (Clause C.5.1.6).
+  public static func atdeccFromAps(sourceMacAddress: EUI48, avtpdu: [UInt8]) -> Appdu {
+    Appdu(messageType: .atdeccFromAps, address: sourceMacAddress, payload: avtpdu)
+  }
+
+  /// ATDECC_FROM_APC carrying `avtpdu`, for `destinationMacAddress` (Clause C.5.1.7).
+  public static func atdeccFromApc(destinationMacAddress: EUI48, avtpdu: [UInt8]) -> Appdu {
+    Appdu(messageType: .atdeccFromApc, address: destinationMacAddress, payload: avtpdu)
+  }
+
+  /// The entity ID in an ENTITY_ID_REQUEST or ENTITY_ID_RESPONSE.
+  public var entityID: UniqueIdentifier? {
+    guard messageType == .entityIDRequest || messageType == .entityIDResponse, payload.count == 8 else {
+      return nil
+    }
+    return UniqueIdentifier(payload.reduce(UInt64(0)) { $0 << 8 | UInt64($1) })
+  }
+
+  /// The APPDU's octets. The payload must not exceed `maximumPayloadLength`.
+  public func serialized() -> [UInt8] {
+    precondition(payload.count <= Self.maximumPayloadLength)
+    var bytes = [UInt8]()
+    bytes.reserveCapacity(Self.headerLength + payload.count)
+    bytes.append(version)
+    bytes.append(messageType.rawValue)
+    bytes.append(UInt8(truncatingIfNeeded: payload.count >> 8))
+    bytes.append(UInt8(truncatingIfNeeded: payload.count))
+    for i in 0..<6 {
+      bytes.append(address[i])
+    }
+    bytes.append(contentsOf: [0, 0]) // reserved
+    bytes.append(contentsOf: payload)
+    return bytes
+  }
+
+  /// The length of the APPDU at the start of `header`, the first `headerLength` octets of
+  /// one, validating its version and payload_length.
+  public static func length(ofHeader header: some Collection<UInt8>) throws(AppduError) -> Int {
+    guard header.count >= headerLength else { throw .truncated }
+    let bytes = Array(header.prefix(4))
+    guard bytes[0] == AppVersion else { throw .unsupportedVersion(bytes[0]) }
+    let payloadLength = Int(bytes[2]) << 8 | Int(bytes[3])
+    guard payloadLength <= maximumPayloadLength else { throw .payloadTooLong(payloadLength) }
+    return headerLength + payloadLength
+  }
+
+  /// Parses one whole APPDU from `bytes`, which holds exactly its header and payload.
+  public init(bytes: [UInt8]) throws(AppduError) {
+    let length = try Self.length(ofHeader: bytes)
+    guard bytes.count == length else { throw .truncated }
+    version = bytes[0]
+    messageType = AppMessageType(rawValue: bytes[1])
+    address = [bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9]]
+    payload = Array(bytes[Self.headerLength...])
+    try validatePayloadLength()
+  }
+
+  /// The payload lengths Table C.6 fixes.
+  private func validatePayloadLength() throws(AppduError) {
+    let expected: Int? = switch messageType {
+    case .nop, .linkUp, .linkDown: 0
+    case .entityIDRequest, .entityIDResponse: 8
+    default: nil
+    }
+    if let expected, payload.count != expected {
+      throw .invalidPayloadLength(messageType, payload.count)
+    }
+  }
+
+  public var description: String {
+    "Appdu(\(messageType), address: \(_macAddressToString(address)), payloadLength: \(payload.count))"
+  }
+}
+
+/// Splits a TCP byte stream into APPDUs.
+public struct AppduStreamDecoder: Sendable {
+  private var buffer = [UInt8]()
+
+  public init() {}
+
+  /// Octets received but not yet part of a whole APPDU.
+  public var bufferedCount: Int { buffer.count }
+
+  /// Appends `bytes` and returns the APPDUs now complete, in order. A malformed APPDU throws;
+  /// the stream cannot be resynchronised after one, so the connection should be closed.
+  public mutating func decode(_ bytes: [UInt8]) throws(AppduError) -> [Appdu] {
+    buffer.append(contentsOf: bytes)
+    var appdus = [Appdu]()
+    var start = 0
+    while buffer.count - start >= Appdu.headerLength {
+      let length = try Appdu.length(ofHeader: buffer[start..<(start + Appdu.headerLength)])
+      guard buffer.count - start >= length else { break }
+      try appdus.append(Appdu(bytes: Array(buffer[start..<(start + length)])))
+      start += length
+    }
+    buffer.removeFirst(start)
+    return appdus
+  }
+}
+
+//
+// AVTPDUs - Clause C.4.5, Table C.7
+//
+
+/// The AVTPDU subtypes an APS transfers (IEEE 1722.1-2021 Clause C.4.5, Table C.7): ADP, AECP
+/// and ACMP.
+public let AppAvtpduSubtypes: ClosedRange<UInt8> = AvtpSubtype.adp.rawValue...AvtpSubtype.acmp.rawValue
+
+/// Whether `avtpdu` is an AVTP control PDU with one of the subtypes of Table C.7.
+public func isAppAvtpdu(_ avtpdu: some Collection<UInt8>) -> Bool {
+  guard avtpdu.count >= AvtpduControlHeader.length, let subtype = avtpdu.first else { return false }
+  return AppAvtpduSubtypes.contains(subtype)
+}
+
+/// `payload`, a received Ethernet payload, without the padding that follows its AVTPDU: the
+/// AVTP control header and control_data_length octets (IEEE 1722-2016 Clause 4.4.3).
+public func avtpdu(trimming payload: [UInt8]) -> [UInt8] {
+  guard payload.count >= AvtpduControlHeader.length else { return payload }
+  let controlDataLength = (Int(payload[2]) << 8 | Int(payload[3])) & 0x07FF
+  let length = AvtpduControlHeader.length + controlDataLength
+  return length < payload.count ? Array(payload.prefix(length)) : payload
+}
+
+extension UInt64 {
+  var bigEndianBytes: [UInt8] {
+    (0..<8).map { UInt8(truncatingIfNeeded: self >> (56 - 8 * $0)) }
+  }
+}

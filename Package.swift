@@ -32,6 +32,10 @@ let package = Package(
       name: "ATDECC",
       targets: ["ATDECC"]
     ),
+    .library(
+      name: "ATDECCProxy",
+      targets: ["ATDECCProxy"]
+    ),
     .executable(
       name: "avdecc-discovery",
       targets: ["Discovery"]
@@ -70,6 +74,21 @@ let package = Package(
         .product(name: "BinaryParsing", package: "swift-binary-parsing"),
         .product(name: "Logging", package: "swift-log"),
       ] + NetLinkTargetDependencies,
+      swiftSettings: CommonSwiftSettings
+    ),
+    // The ATDECC Proxy Protocol (IEEE 1722.1-2021 Annex C): APPDU codec, the APS state machine
+    // and, on Linux, a server over TCP and WebSocket that relays to a network port.
+    .target(
+      name: "ATDECCProxy",
+      dependencies: [
+        "ATDECC",
+        .product(name: "IEEE802", package: "IEEE802Swift"),
+        .product(name: "IEEE802Linux", package: "IEEE802Swift", condition: .when(platforms: [.linux])),
+        .product(name: "IORing", package: "IORingSwift", condition: .when(platforms: [.linux])),
+        .product(name: "IORingUtils", package: "IORingSwift", condition: .when(platforms: [.linux])),
+        .product(name: "SystemPackage", package: "swift-system", condition: .when(platforms: [.linux])),
+        .product(name: "Logging", package: "swift-log"),
+      ],
       swiftSettings: CommonSwiftSettings
     ),
     .executableTarget(
@@ -124,6 +143,20 @@ let package = Package(
         "ATDECC",
         .product(name: "BinaryParsing", package: "swift-binary-parsing"),
         .product(name: "IORing", package: "IORingSwift", condition: .when(platforms: [.linux])),
+      ],
+      swiftSettings: CommonSwiftSettings
+    ),
+    .testTarget(
+      name: "ATDECCProxyTests",
+      dependencies: [
+        "ATDECC",
+        "ATDECCProxy",
+        .product(name: "IEEE802", package: "IEEE802Swift"),
+        .product(name: "SocketAddress", package: "SocketAddress", condition: .when(platforms: [.linux])),
+        .product(name: "IORing", package: "IORingSwift", condition: .when(platforms: [.linux])),
+        .product(name: "IORingUtils", package: "IORingSwift", condition: .when(platforms: [.linux])),
+        .product(name: "SystemPackage", package: "swift-system", condition: .when(platforms: [.linux])),
+        .product(name: "Logging", package: "swift-log"),
       ],
       swiftSettings: CommonSwiftSettings
     ),

@@ -1,0 +1,418 @@
+//
+// Copyright (c) 2026 PADL Software Pty Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the License);
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an 'AS IS' BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+#if os(Linux)
+
+import ATDECC
+import Glibc
+import IEEE802
+import IEEE802Linux
+import IORing
+import IORingUtils
+import Logging
+import Synchronization
+import struct SystemPackage.Errno
+
+/// How an APS is run.
+public struct AtdeccProxyServerConfiguration: Sendable {
+  /// The TCP port to listen on, both for CONNECT and WebSocket upgrades; 0 lets the kernel
+  /// choose one (see `AtdeccProxyServer.port`).
+  public var port: UInt16
+  /// The most APCs served at once; a further one is answered 503.
+  public var maximumConnections: Int
+  /// The hosts, besides the APS's own, whose pages may open a WebSocket to it.
+  public var allowedWebSocketOrigins: [String]
+  /// How long an APC may spend sending its HTTP request.
+  public var requestTimeout: Duration
+
+  public init(
+    port: UInt16 = AppDefaultPort,
+    maximumConnections: Int = 8,
+    allowedWebSocketOrigins: [String] = AppNoodlesWebSocketOrigins,
+    requestTimeout: Duration = .seconds(10)
+  ) {
+    self.port = port
+    self.maximumConnections = maximumConnections
+    self.allowedWebSocketOrigins = allowedWebSocketOrigins
+    self.requestTimeout = requestTimeout
+  }
+}
+
+/// An ATDECC Proxy Server (IEEE 1722.1-2021 Annex C): accepts APCs on a TCP port and relays
+/// ATDECC PDUs between each of them and the layer 2 network.
+///
+/// Each connection runs its own APS state machine (Clause C.5.2) over its own network port,
+/// made with `makePort`, so APCs see each other's frames as they would other controllers'
+/// on the LAN. Besides HTTP CONNECT, the port accepts WebSocket upgrades on
+/// `AppWebSocketPath`, an extension for browser controllers. Advertising it with DNS-SD
+/// (Clause C.2) is the caller's: see `appServiceTXTRecord`.
+public final class AtdeccProxyServer<Port: NetworkPort>: Sendable {
+  public let configuration: AtdeccProxyServerConfiguration
+  public let entityIDs: AtdeccProxyEntityIDs
+  /// The port the server listens on.
+  public let port: UInt16
+  private let listener: Socket
+  private let makePort: @Sendable () throws -> Port
+  private let logger: Logger
+  private let connectionCount = Atomic(0)
+
+  /// Listens on `configuration.port` on every address, IPv6 and IPv4. `linkMacAddress` is the
+  /// MAC address of the ports `makePort` makes (linkMac, Clause C.5.2.1.15).
+  public init(
+    configuration: AtdeccProxyServerConfiguration = .init(),
+    linkMacAddress: EUI48,
+    logger: Logger,
+    ring: IORing = .shared,
+    makePort: @escaping @Sendable () throws -> Port
+  ) throws {
+    self.configuration = configuration
+    entityIDs = AtdeccProxyEntityIDs(linkMacAddress: linkMacAddress)
+    self.makePort = makePort
+    self.logger = logger
+    listener = try Self.listen(on: configuration.port, ring: ring)
+    port = try listener.localAddress.port
+  }
+
+  private static func listen(on port: UInt16, ring: IORing) throws -> Socket {
+    let socket: Socket
+    if let dualStack = try? Socket(ring: ring, domain: sa_family_t(AF_INET6), type: SOCK_STREAM, protocol: 0) {
+      try dualStack.setBooleanOption(level: CInt(IPPROTO_IPV6), option: IPV6_V6ONLY, to: false)
+      socket = dualStack
+    } else {
+      // a host without IPv6
+      socket = try Socket(ring: ring, domain: sa_family_t(AF_INET), type: SOCK_STREAM, protocol: 0)
+    }
+    try socket.setReuseAddr()
+    try socket.setTcpNoDelay()
+    try socket.bind(port: port)
+    try socket.listen()
+    return socket
+  }
+
+  /// Serves APCs until the task is cancelled, then closes every connection (FINISH).
+  public func run() async throws {
+    logger.info("ATDECC proxy listening on TCP port \(port)")
+    defer { try? listener.shutdown() }
+    try await withThrowingDiscardingTaskGroup { group in
+      while !Task.isCancelled {
+        let client: Socket
+        do {
+          client = try await listener.accept()
+        } catch let error as Errno where error == .canceled || error == .interrupted {
+          continue
+        }
+        group.addTask { [self] in await serve(client) }
+      }
+    }
+  }
+
+  private func serve(_ socket: Socket) async {
+    let peer = (try? socket.peerName) ?? "unknown"
+    let count = connectionCount.add(1, ordering: .relaxed).newValue
+    defer {
+      connectionCount.subtract(1, ordering: .relaxed)
+      try? socket.shutdown()
+    }
+    do {
+      try await serve(socket, refusing: count > configuration.maximumConnections)
+    } catch {
+      logger.debug("ATDECC proxy connection from \(peer) ended: \(error)")
+    }
+  }
+
+  private func serve(_ socket: Socket, refusing: Bool) async throws {
+    let (head, leftover) = try await readRequestHead(socket)
+    var verdict = head.map { appVerdict(on: $0, allowedWebSocketOrigins: configuration.allowedWebSocketOrigins) }
+      ?? .refused(400)
+    var port: Port?
+    if refusing, verdict.transport != nil {
+      verdict = .refused(503)
+    } else if verdict.transport != nil {
+      do {
+        port = try makePort()
+      } catch {
+        logger.warning("ATDECC proxy cannot open its network port: \(error)")
+        verdict = .refused(503)
+      }
+    }
+    guard let transport = verdict.transport, let port else {
+      logger.debug("ATDECC proxy refused \(head?.method ?? "a malformed request") \(head?.target ?? ""): \(verdict.requestValid)")
+      _ = try await socket.write(verdict.response, count: verdict.response.count, awaitingAllWritten: true)
+      return
+    }
+    let connection = AtdeccProxyConnection(
+      socket: socket,
+      transport: transport,
+      verdict: verdict,
+      leftover: leftover,
+      port: port,
+      entityIDs: entityIDs,
+      logger: logger
+    )
+    await connection.run()
+  }
+
+  /// The request head and whatever followed it, or a nil head if it is malformed or too long.
+  private func readRequestHead(_ socket: Socket) async throws -> (AppHTTPRequestHead?, [UInt8]) {
+    var bytes = [UInt8]()
+    while bytes.count <= AppMaximumRequestHeadLength {
+      if let end = AppHTTPRequestHead.endOfHead(in: bytes) {
+        return (AppHTTPRequestHead(bytes: bytes[..<end]), Array(bytes[end...]))
+      }
+      let chunk = try await socket.receive(count: 1024, timeout: configuration.requestTimeout)
+      guard !chunk.isEmpty else { throw Errno.connectionReset }
+      bytes += chunk
+    }
+    return (nil, [])
+  }
+}
+
+public extension AtdeccProxyServer where Port == EthernetPort {
+  /// An APS on the Ethernet interface `interfaceName`, one AF_PACKET socket per connection.
+  convenience init(
+    interfaceName: String,
+    configuration: AtdeccProxyServerConfiguration = .init(),
+    logger: Logger,
+    ring: IORing = .shared
+  ) throws {
+    let interface = try EthernetInterface(name: interfaceName)
+    try self.init(configuration: configuration, linkMacAddress: interface.macAddress, logger: logger, ring: ring) {
+      try EthernetPort(interfaceName: interfaceName)
+    }
+  }
+}
+
+//
+// Connections
+//
+
+/// One APC's connection: its state machine, driven by events from the APC, the network port,
+/// the port's link and a one-second clock (Clause C.5.2.1.4), handled one at a time.
+private final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
+  private enum Event: Sendable {
+    case apc(Appdu)
+    case apcClosed
+    case layer2(IEEE802Packet)
+    case link(Bool)
+    case tick
+
+    var messageType: AppMessageType? {
+      if case let .apc(appdu) = self { appdu.messageType } else { nil }
+    }
+  }
+
+  private let socket: Socket
+  private let transport: AppTransport
+  private let verdict: AppRequestVerdict
+  private let leftover: [UInt8]
+  private let port: Port
+  private let entityIDs: AtdeccProxyEntityIDs
+  private let logger: Logger
+
+  init(
+    socket: Socket,
+    transport: AppTransport,
+    verdict: AppRequestVerdict,
+    leftover: [UInt8],
+    port: Port,
+    entityIDs: AtdeccProxyEntityIDs,
+    logger: Logger
+  ) {
+    self.socket = socket
+    self.transport = transport
+    self.verdict = verdict
+    self.leftover = leftover
+    self.port = port
+    self.entityIDs = entityIDs
+    self.logger = logger
+  }
+
+  private typealias Outputs = (apc: AsyncStream<[UInt8]>.Continuation, layer2: AsyncStream<IEEE802Packet>.Continuation)
+
+  func run() async {
+    let (events, eventSink) = AsyncStream<Event>.makeStream()
+    let (apcOutput, apcSink) = AsyncStream<[UInt8]>.makeStream()
+    let (layer2Output, layer2Sink) = AsyncStream<IEEE802Packet>.makeStream()
+    let key = entityIDs.makeConnection()
+    defer { entityIDs.release(key) }
+    // unstructured so that, once the connection closes, what is queued for the APC (a refusal,
+    // a WebSocket close) is still written while the producers are cancelled
+    let writer = Task { [self] in await writeApc(apcOutput) }
+    await withTaskGroup { group in
+      group.addTask { [self] in await writeLayer2(layer2Output) }
+      group.addTask { [self] in await monitorLink(eventSink) }
+      group.addTask { [self] in await receiveLayer2(eventSink) }
+      group.addTask { [self] in await tick(eventSink) }
+      group.addTask { [self] in await readApc(eventSink, apcSink) }
+      await drive(events, key: key, (apcSink, layer2Sink))
+      apcSink.finish()
+      layer2Sink.finish()
+      eventSink.finish()
+      group.cancelAll()
+      // ends a read in progress, which may not notice cancellation
+      try? socket.shutdown(.read)
+      await writer.value
+    }
+  }
+
+  /// The state machine, from the request on; ends at CLOSED.
+  private func drive(_ events: AsyncStream<Event>, key: Int, _ outputs: Outputs) async {
+    let start = ContinuousClock.now
+    var currentTime: UInt64 { UInt64(max((ContinuousClock.now - start).components.seconds, 0)) }
+    var iterator = events.makeAsyncIterator()
+    // START_TRANSFER reports the link status, so learn it before answering the request
+    var linkStatus = false
+    var pending = [Event]()
+    while let event = await iterator.next() {
+      if case let .link(isUp) = event {
+        linkStatus = isUp
+        break
+      }
+      pending.append(event)
+    }
+    var machine = AtdeccProxyServerStateMachine(linkMacAddress: port.macAddress, linkStatus: linkStatus) {
+      [entityIDs] _, requested in entityIDs.assign(key, requested: requested)
+    }
+    guard perform(machine.requestReceived(verdict.requestValid, at: currentTime), outputs) else { return }
+    for event in pending {
+      guard perform(handle(event, &machine, at: currentTime), outputs) else { return }
+    }
+    while let event = await iterator.next() {
+      guard perform(handle(event, &machine, at: currentTime), outputs) else { return }
+    }
+  }
+
+  private func handle(
+    _ event: Event,
+    _ machine: inout AtdeccProxyServerStateMachine,
+    at currentTime: UInt64
+  ) -> [AtdeccProxyServerStateMachine.Action] {
+    switch event {
+    case let .apc(appdu):
+      let actions = machine.apcMessageReceived(appdu, at: currentTime)
+      if appdu.messageType == .entityIDRequest, let id = machine.assignedEntityID {
+        logger.debug("ATDECC proxy assigned entity ID \(id)")
+      }
+      return actions
+    case .apcClosed: return machine.close()
+    case let .layer2(packet): return machine.layer2FrameReceived(packet, at: currentTime)
+    case let .link(isUp): return machine.linkStatusChanged(isUp, at: currentTime)
+    case .tick: return machine.timeAdvanced(to: currentTime)
+    }
+  }
+
+  /// Performs `actions`; false once the connection is to close.
+  private func perform(_ actions: [AtdeccProxyServerStateMachine.Action], _ outputs: Outputs) -> Bool {
+    for action in actions {
+      switch action {
+      case .sendHttpResponse:
+        outputs.apc.yield(verdict.response)
+      case let .sendToApc(appdu):
+        outputs.apc.yield(encode(appdu))
+      case let .sendToLayer2(packet):
+        outputs.layer2.yield(packet)
+      case .closeConnection:
+        if case .webSocket = transport { outputs.apc.yield(webSocketFrame(.close, [0x03, 0xE8])) }
+        return false
+      }
+    }
+    return true
+  }
+
+  private func encode(_ appdu: Appdu) -> [UInt8] {
+    switch transport {
+    case .connect: appdu.serialized()
+    case .webSocket: webSocketFrame(.binary, appdu.serialized())
+    }
+  }
+
+  /// The one writer of the socket, so that what is sent is never interleaved. A write that
+  /// fails ends the connection: the APC's end of it is gone, so reading it ends too.
+  private func writeApc(_ output: AsyncStream<[UInt8]>) async {
+    do {
+      for await bytes in output {
+        _ = try await socket.write(bytes, count: bytes.count, awaitingAllWritten: true)
+      }
+    } catch {
+      logger.debug("ATDECC proxy could not write to an APC: \(error)")
+      try? socket.shutdown()
+    }
+  }
+
+  /// Frames for the network port, sent in order; one that fails is dropped, as on a LAN.
+  private func writeLayer2(_ output: AsyncStream<IEEE802Packet>) async {
+    for await packet in output {
+      do {
+        try await port.send(packet)
+      } catch {
+        logger.debug("ATDECC proxy could not send a frame: \(error)")
+      }
+    }
+  }
+
+  // MARK: - Producers
+
+  private func readApc(_ events: AsyncStream<Event>.Continuation, _ output: AsyncStream<[UInt8]>.Continuation) async {
+    defer { events.yield(.apcClosed) }
+    var reader = AppChannelReader(transport: transport)
+    do {
+      var bytes = leftover
+      while !Task.isCancelled {
+        for item in try reader.read(bytes) {
+          switch item {
+          case let .appdu(appdu): events.yield(.apc(appdu))
+          case let .reply(frame): output.yield(frame)
+          case .closed: return
+          }
+        }
+        bytes = try await socket.receive(count: 4096)
+        guard !bytes.isEmpty else { return }
+      }
+    } catch {
+      logger.debug("ATDECC proxy closing a connection: \(error)")
+    }
+  }
+
+  private func receiveLayer2(_ events: AsyncStream<Event>.Continuation) async {
+    while !Task.isCancelled {
+      do {
+        try await port.receive { packet in events.yield(.layer2(packet)) }
+      } catch {
+        logger.trace("ATDECC proxy reception ended: \(error)")
+      }
+      // a port whose link is down fails until it comes up again
+      try? await Task.sleep(for: .seconds(1))
+    }
+  }
+
+  private func monitorLink(_ events: AsyncStream<Event>.Continuation) async {
+    do {
+      try await port.monitorLinkState { isUp in events.yield(.link(isUp)) }
+    } catch {
+      logger.warning("ATDECC proxy cannot follow the link state: \(error)")
+      events.yield(.link(true))
+    }
+  }
+
+  private func tick(_ events: AsyncStream<Event>.Continuation) async {
+    while !Task.isCancelled {
+      try? await Task.sleep(for: .seconds(1))
+      events.yield(.tick)
+    }
+  }
+}
+
+#endif
