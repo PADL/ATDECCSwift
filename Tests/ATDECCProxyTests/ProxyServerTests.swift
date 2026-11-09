@@ -410,6 +410,28 @@ final class ProxyServerTests: XCTestCase {
   }
   #endif
 
+  /// A connection the APS closes (C.5.2.2.4, for a subtype outside Table C.7) gives its slot
+  /// back, though its client stays connected.
+  func testAConnectionTheApsClosesGivesBackItsSlot() async throws {
+    serverTask.cancel()
+    _ = await serverTask.result
+    try await startServer(maximumConnections: 1)
+    let first = try await TestApc(port: port)
+    try await first.open(port: port)
+    _ = try await first.nextAppdu()
+    try await first.sendAppdu(.atdeccFromApc(destinationMacAddress: entityMacAddress, avtpdu: makeAvtpdu(subtype: 0x02)))
+    // the first client neither reads nor closes; a second must still be served
+    var head = ""
+    for _ in 0..<50 {
+      let second = try await TestApc(port: port)
+      head = try await second.open(port: port)
+      if Self.isAccepted(head) { break }
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    XCTAssertTrue(Self.isAccepted(head), head)
+    _ = first
+  }
+
   func testAConnectionThatHasNotSentItsRequestUsesNoSlot() async throws {
     serverTask.cancel()
     _ = await serverTask.result

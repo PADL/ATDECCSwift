@@ -100,7 +100,12 @@ public final class AtdeccProxyServer<Port: NetworkPort>: Sendable {
   /// Serves APCs until the task is cancelled, then closes every connection (FINISH). Throws if
   /// the server cannot listen, or stops listening.
   public func run() async throws {
-    logger.info("ATDECC proxy listening on TCP port \(configuration.port)")
+    // the port the kernel chose, if asked to choose
+    let announcement = Task { [self] in
+      try? await waitUntilListening()
+      if let port = await listeningPort() { logger.info("ATDECC proxy listening on TCP port \(port)") }
+    }
+    defer { announcement.cancel() }
     try await server.run()
   }
 
@@ -269,8 +274,11 @@ private struct AtdeccProxyWebSocket<Port: NetworkPort>: WSHandler {
   func makeFrames(for client: AsyncThrowingStream<WSFrame, any Error>) async throws -> AsyncStream<WSFrame> {
     let task = Task { [connection, slot, logger] in
       await withTaskGroup { group in
-        group.addTask { await connection.run() }
         group.addTask { await Self.read(client, into: connection, logger: logger) }
+        await connection.run()
+        // CLOSED, whoever ended it: a read still waiting on the socket FlyingFox is closing
+        // would never end, holding the slot and the network port
+        group.cancelAll()
       }
       _ = slot
     }
