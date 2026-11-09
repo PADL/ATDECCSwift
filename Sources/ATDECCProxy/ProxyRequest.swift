@@ -18,7 +18,8 @@ import FlyingFox
 
 // APP over WebSocket is an extension, not part of IEEE 1722.1-2021 Annex C: it lets browser
 // controllers reach an APS. It follows the Noodles/Sienda ATDECC proxy: the upgrade is a GET of
-// /ws on the APP port, without a subprotocol, and messages are binary, each one APPDU.
+// /ws, without a subprotocol, and messages are binary, each one APPDU. The Noodles controller
+// opens ws://host:port/ws, so the path may be served on a port that serves other routes too.
 
 /// The request path on which an APS accepts WebSocket upgrades.
 public let AppWebSocketPath = "/ws"
@@ -28,6 +29,14 @@ public let AppWebSocketMaximumMessageLength = 4096
 
 /// The origins of the Noodles controller, which the Noodles/Sienda proxy always allows.
 public let AppNoodlesWebSocketOrigins = ["noodlescontroller.com", "app.noodlescontroller.com", "noodles-controller.web.app"]
+
+/// Whether this build serves HTTP CONNECT (the HTTPTunnel trait); without it, CONNECT is
+/// refused 501 and only WebSocket is served, so there is no Annex C entry point to advertise.
+#if HTTPTunnel
+public let AppServesConnect = true
+#else
+public let AppServesConnect = false
+#endif
 
 /// How an APC's APPDUs are carried once its request is accepted.
 public enum AppTransport: Sendable, Equatable {
@@ -103,9 +112,9 @@ public func appRequestOutcome(on request: HTTPRequest, allowedWebSocketOrigins: 
 }
 
 /// Whether a WebSocket upgrade from a page at `origin` (its Origin field) is allowed: no Origin
-/// (not a browser), a page served by the APS's own host (`host`, its Host field, compared by
-/// host alone, as a page at http://10.10.32.8 opens ws://10.10.32.8:17221), or one of
-/// `allowedHosts`, each a host or host:port.
+/// (not a browser), a page served by the host the APC reached (`host`, its Host field, compared
+/// by host alone, so a page at http://10.10.32.8 may open ws://10.10.32.8:8080/ws as well as
+/// ws://10.10.32.8/ws), or one of `allowedHosts`, each a host or host:port.
 public func isAllowedWebSocketOrigin(_ origin: String?, host: String?, allowedHosts: [String]) -> Bool {
   guard let origin else { return true }
   guard let schemeEnd = origin.range(of: "://") else { return false }

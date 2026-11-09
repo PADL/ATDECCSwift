@@ -30,7 +30,7 @@ entities, which responses raise notifications) deliberately matches it.
 | ACMP controller commands and sniffing (§8.2) | ✓ |
 | Unsolicited notifications as events (§7.5.2) | ✓ |
 | Raw PDU send | ✓ |
-| ATDECC Proxy Protocol (Annex C) | ✓ `ATDECCProxy`: APPDU codec and APS state machine; on Linux an APS on FlyingFox: HTTP CONNECT and, as an extension for browser controllers, WebSocket on `/ws`, relaying to an `EthernetPort` |
+| ATDECC Proxy Protocol (Annex C) | ✓ `ATDECCProxy`: APPDU codec and APS state machine; on Linux an APS on FlyingFox, relaying to an `EthernetPort`: `AtdeccProxyHandler` serves WebSocket on `/ws` (an extension, for browser controllers) and mounts on a server shared with other routes; `AtdeccProxyServer` runs it on a port of its own, with HTTP CONNECT behind the `HTTPTunnel` trait |
 | Serial (UART) transport | ✓ COBS-framed AVTPDUs |
 | Not yet | authentication and security, SET/GET_PTP_PORT_INFO, address access, entity responder |
 

@@ -24,6 +24,9 @@ import IORing
 import IORingUtils
 import Logging
 import SocketAddress
+import FlyingFox
+import FlyingSocks
+import Foundation
 import Synchronization
 import struct SystemPackage.Errno
 import XCTest
@@ -32,14 +35,14 @@ private let timeout = Duration.seconds(5)
 
 /// An APC over loopback TCP, speaking either CONNECT or WebSocket as the Noodles controller does.
 private final class TestApc {
-  let socket: Socket
+  let socket: IORingUtils.Socket
   private var buffer = [UInt8]()
   private var appdus = AppduStreamDecoder()
   private var decoded = [Appdu]()
   private var messages = [TestWebSocketMessage]()
 
   init(port: UInt16, host: String = "127.0.0.1", receiveBufferSize: CInt? = nil) async throws {
-    socket = try Socket(ring: .shared, domain: sa_family_t(AF_INET), type: SOCK_STREAM, protocol: 0)
+    socket = try IORingUtils.Socket(ring: .shared, domain: sa_family_t(AF_INET), type: SOCK_STREAM, protocol: 0)
     if let receiveBufferSize {
       try socket.setIntegerOption(option: SO_RCVBUF, to: receiveBufferSize)
     }
@@ -173,15 +176,20 @@ final class ProxyServerTests: XCTestCase {
     _ = await serverTask.result
   }
 
-  private func startServer(maximumConnections: Int) async throws {
-    let configuration = AtdeccProxyServerConfiguration(port: 0, maximumConnections: maximumConnections)
+  private func makeHandler(maximumConnections: Int = 8) -> AtdeccProxyHandler<VirtualPort> {
+    let configuration = AtdeccProxyConfiguration(maximumConnections: maximumConnections)
     let network = network!
-    server = AtdeccProxyServer(configuration: configuration, linkMacAddress: linkMacAddress, logger: Logger(label: "test")) {
+    return AtdeccProxyHandler(configuration: configuration, linkMacAddress: linkMacAddress, logger: Logger(label: "test")) {
       [connectionPorts] in
       let port = network.makePort(macAddress: linkMacAddress)
       connectionPorts.ports.withLock { $0.append(port) }
       return port
     }
+  }
+
+  private func startServer(maximumConnections: Int, transports: Set<AppTransport> = [.connect, .webSocket]) async throws {
+    let handler = makeHandler(maximumConnections: maximumConnections)
+    server = AtdeccProxyServer(port: 0, transports: transports, handler: handler, logger: Logger(label: "test"))
     serverTask = Task { [server] in try await server!.run() }
     try await server.waitUntilListening()
     guard let port = await server.listeningPort() else { throw POSIXError(.EADDRNOTAVAIL) }
@@ -283,13 +291,18 @@ final class ProxyServerTests: XCTestCase {
   /// The exchange of the Noodles controller: GET /ws from its origin, no subprotocol, one APPDU
   /// per binary message, ENTITY_ID_REQUEST first.
   func testTheNoodlesWebSocketExchangeWorks() async throws {
+    try await noodlesExchange(port: port, origin: "https://noodlescontroller.com")
+  }
+
+  /// The Noodles exchange with the server on `port`, from a page at `origin`.
+  private func noodlesExchange(port: UInt16, origin: String) async throws {
     let apc = try await TestApc(port: port)
     var upgrade = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
     upgrade += "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
-    upgrade += "Origin: https://noodlescontroller.com\r\n\r\n"
+    upgrade += "Origin: \(origin)\r\n\r\n"
     try await apc.send(Array(upgrade.utf8))
     let head = try await apc.readHead()
-    XCTAssertTrue(head.hasPrefix("HTTP/1.1 101 Switching Protocols\r\n"))
+    XCTAssertTrue(head.hasPrefix("HTTP/1.1 101 Switching Protocols\r\n"), head)
     XCTAssertTrue(head.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"))
 
     let awaited3 = try await apc.readMessageAppdu().messageType
@@ -317,6 +330,43 @@ final class ProxyServerTests: XCTestCase {
     // one close frame in answer, then the end of the connection
     let rest = try await apc.readToEnd()
     XCTAssertEqual(rest, [])
+  }
+
+  /// The handler mounted on an HTTP server that serves other routes, as a device's web server
+  /// does: the Noodles exchange on /ws, from the server's own origin and from Noodles', while
+  /// other requests are left to the other routes, and a foreign origin is still refused.
+  func testTheHandlerMountedOnASharedServerServesNoodles() async throws {
+    let shared = HTTPServer(address: try sockaddr_in.inet(ip4: "127.0.0.1", port: 0), logger: .disabled)
+    await shared.appendRoute(AtdeccProxyHandler<VirtualPort>.webSocketRoute, to: makeHandler())
+    await shared.appendRoute("GET /*") { _ in HTTPResponse(statusCode: .ok, body: Data("web".utf8)) }
+    let sharedTask = Task { try await shared.run() }
+    defer { sharedTask.cancel() }
+    try await shared.waitUntilListening()
+    guard case let .ip4(_, sharedPort) = await shared.listeningAddress else { throw POSIXError(.EADDRNOTAVAIL) }
+
+    try await noodlesExchange(port: sharedPort, origin: "http://127.0.0.1:\(sharedPort)")
+    try await noodlesExchange(port: sharedPort, origin: "https://noodlescontroller.com")
+
+    let page = try await TestApc(port: sharedPort)
+    try await page.send(Array("GET /index.html HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".utf8))
+    let pageHead = try await page.readHead()
+    XCTAssertTrue(pageHead.hasPrefix("HTTP/1.1 200 OK\r\n"), pageHead)
+    let foreign = try await TestApc(port: sharedPort)
+    var upgrade = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:\(sharedPort)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+    upgrade += "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nOrigin: https://evil.example\r\n\r\n"
+    try await foreign.send(Array(upgrade.utf8))
+    let foreignHead = try await foreign.readHead()
+    XCTAssertTrue(foreignHead.hasPrefix("HTTP/1.1 403 Forbidden\r\n"), foreignHead)
+  }
+
+  /// A server for CONNECT alone, as a device whose WebSocket is on its web server runs one.
+  func testAServerWithoutWebSocketRefusesUpgrades() async throws {
+    serverTask.cancel()
+    _ = await serverTask.result
+    try await startServer(maximumConnections: 8, transports: [.connect])
+    let apc = try await TestApc(port: port)
+    let head = try await apc.openWebSocket(port: port)
+    XCTAssertTrue(head.hasPrefix("HTTP/1.1 404 Not Found\r\n"), head)
   }
 
   func testAWebSocketFromAForeignOriginIsRefused() async throws {
@@ -568,14 +618,14 @@ final class StalledWebSocketTests: XCTestCase {
     let network = VirtualNetwork()
     let entity = network.makePort(macAddress: entityMacAddress)
     let (released, releases) = AsyncStream<()>.makeStream()
-    let configuration = AtdeccProxyServerConfiguration(port: 0, maximumConnections: 1)
-    let server = AtdeccProxyServer(
-      configuration: configuration,
+    let handler = AtdeccProxyHandler(
+      configuration: AtdeccProxyConfiguration(maximumConnections: 1),
       linkMacAddress: linkMacAddress,
       logger: Logger(label: "test")
     ) {
       ReleaseReportingPort(network.makePort(macAddress: linkMacAddress), released: releases)
     }
+    let server = AtdeccProxyServer(port: 0, handler: handler, logger: Logger(label: "test"))
     let serverTask = Task { try await server.run() }
     defer { serverTask.cancel() }
     try await server.waitUntilListening()

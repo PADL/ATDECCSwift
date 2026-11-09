@@ -161,6 +161,9 @@ let package = Package(
         "ATDECC",
         "ATDECCProxy",
         .product(name: "BinaryParsing", package: "swift-binary-parsing"),
+        // a handler mounted on a server shared with other routes
+        .product(name: "FlyingFox", package: "FlyingFox"),
+        .product(name: "FlyingSocks", package: "FlyingFox"),
         .product(name: "IEEE802", package: "IEEE802Swift"),
         .product(name: "SocketAddress", package: "SocketAddress", condition: .when(platforms: [.linux])),
         .product(name: "IORing", package: "IORingSwift", condition: .when(platforms: [.linux])),

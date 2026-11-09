@@ -26,158 +26,61 @@ import IEEE802Linux
 import Logging
 import Synchronization
 
-/// How an APS is run.
-public struct AtdeccProxyServerConfiguration: Sendable {
-  /// The TCP port to listen on, at every address, for WebSocket upgrades (and CONNECT); 0 lets
-  /// the kernel choose one (see `AtdeccProxyServer.listeningPort()`).
-  public var port: UInt16
+/// How an APS serves APCs, on whichever HTTP server carries it.
+public struct AtdeccProxyConfiguration: Sendable {
   /// The most APCs served at once; a further one is answered 503.
   public var maximumConnections: Int
-  /// The hosts, besides the APS's own, whose pages may open a WebSocket to it.
+  /// The hosts, besides the one the APC reached (its Host field), whose pages may open a
+  /// WebSocket to the APS.
   public var allowedWebSocketOrigins: [String]
 
-  public init(
-    port: UInt16 = AppDefaultPort,
-    maximumConnections: Int = 8,
-    allowedWebSocketOrigins: [String] = AppNoodlesWebSocketOrigins
-  ) {
-    self.port = port
+  public init(maximumConnections: Int = 8, allowedWebSocketOrigins: [String] = AppNoodlesWebSocketOrigins) {
     self.maximumConnections = maximumConnections
     self.allowedWebSocketOrigins = allowedWebSocketOrigins
   }
 }
 
-/// An ATDECC Proxy Server (IEEE 1722.1-2021 Annex C): accepts APCs on a TCP port and relays
-/// ATDECC PDUs between each of them and the layer 2 network.
+/// An ATDECC Proxy Server (IEEE 1722.1-2021 Annex C) as a FlyingFox handler: it accepts APCs
+/// and relays ATDECC PDUs between each of them and the layer 2 network.
 ///
-/// HTTP is FlyingFox's, one `HTTPServer` on the IPv6 wildcard, which accepts IPv4 too. An
-/// upgrade on `AppWebSocketPath` (an extension, for browser controllers) carries one APPDU per
-/// binary message; with the HTTPTunnel trait, CONNECT carries a byte stream of them. Each
-/// connection runs its own APS state machine (Clause C.5.2) over its own network port, made
-/// with `makePort`, so APCs see each other's frames as other controllers' on the LAN. There is
-/// no authentication: any host that reaches the port can send ATDECC frames on the LAN.
-public final class AtdeccProxyServer<Port: NetworkPort>: Sendable {
-  public let configuration: AtdeccProxyServerConfiguration
+/// It can be mounted at `webSocketRoute` on an HTTP server that serves other routes too, or
+/// served on a port of its own by `AtdeccProxyServer`. An upgrade on `AppWebSocketPath` (an
+/// extension, for browser controllers) carries one APPDU per binary message; with the
+/// HTTPTunnel trait, CONNECT carries a byte stream of them. Each connection runs its own APS
+/// state machine (Clause C.5.2) over its own network port, made with `makePort`, so APCs see
+/// each other's frames as other controllers' on the LAN; the connection limit and the entity
+/// IDs are the handler's, however many servers it is mounted on. There is no authentication:
+/// any host that reaches the handler can send ATDECC frames on the LAN.
+public final class AtdeccProxyHandler<Port: NetworkPort>: HTTPHandler, Sendable {
+  /// The route to mount the handler on beside other routes: WebSocket upgrades on
+  /// `AppWebSocketPath`. Mount it before any route that would match that path too.
+  public static var webSocketRoute: HTTPRoute {
+    HTTPRoute("GET \(AppWebSocketPath)")
+  }
+
+  public let configuration: AtdeccProxyConfiguration
   public let entityIDs: AtdeccProxyEntityIDs
-  private let server: HTTPServer
+  private let slots: AtdeccProxySlots
+  private let makePort: @Sendable () throws -> Port
   private let logger: Logger
 
   /// `linkMacAddress` is the MAC address of the ports `makePort` makes (linkMac, Clause
   /// C.5.2.1.15).
   public init(
-    configuration: AtdeccProxyServerConfiguration = .init(),
+    configuration: AtdeccProxyConfiguration = .init(),
     linkMacAddress: EUI48,
     logger: Logger,
     makePort: @escaping @Sendable () throws -> Port
   ) {
     self.configuration = configuration
+    entityIDs = AtdeccProxyEntityIDs(linkMacAddress: linkMacAddress)
+    slots = AtdeccProxySlots(capacity: configuration.maximumConnections)
+    self.makePort = makePort
     self.logger = logger
-    let entityIDs = AtdeccProxyEntityIDs(linkMacAddress: linkMacAddress)
-    self.entityIDs = entityIDs
-    let handler = AtdeccProxyRequestHandler(
-      configuration: configuration,
-      entityIDs: entityIDs,
-      slots: AtdeccProxySlots(capacity: configuration.maximumConnections),
-      makePort: makePort,
-      logger: logger
-    )
-    #if HTTPTunnel
-    // FlyingFox's main branch, which the trait needs, bounds incoming WebSocket frames
-    let config = HTTPServer.Configuration(
-      address: sockaddr_in6.inet6(port: configuration.port),
-      webSocketMaxFrameSize: AppWebSocketMaximumMessageLength,
-      logger: AtdeccProxyHTTPLogging(logger: logger)
-    )
-    #else
-    let config = HTTPServer.Configuration(
-      address: sockaddr_in6.inet6(port: configuration.port),
-      logger: AtdeccProxyHTTPLogging(logger: logger)
-    )
-    #endif
-    server = HTTPServer(config: config, handler: handler)
   }
 
-  /// Serves APCs until the task is cancelled, then closes every connection (FINISH). Throws if
-  /// the server cannot listen, or stops listening.
-  public func run() async throws {
-    // the port the kernel chose, if asked to choose
-    let announcement = Task { [self] in
-      try? await waitUntilListening()
-      if let port = await listeningPort() { logger.info("ATDECC proxy listening on TCP port \(port)") }
-    }
-    defer { announcement.cancel() }
-    try await server.run()
-  }
-
-  public func waitUntilListening(timeout: TimeInterval = 5) async throws {
-    try await server.waitUntilListening(timeout: timeout)
-  }
-
-  /// The port the server listens on, once listening.
-  public func listeningPort() async -> UInt16? {
-    switch await server.listeningAddress {
-    case let .ip4(_, port), let .ip6(_, port): port
-    default: nil
-    }
-  }
-}
-
-public extension AtdeccProxyServer where Port == EthernetPort {
-  /// An APS relaying to the Ethernet interface `interfaceName`, one AF_PACKET socket per
-  /// connection.
-  convenience init(
-    interfaceName: String,
-    configuration: AtdeccProxyServerConfiguration = .init(),
-    logger: Logger
-  ) throws {
-    let interface = try EthernetInterface(name: interfaceName)
-    self.init(configuration: configuration, linkMacAddress: interface.macAddress, logger: logger) {
-      try EthernetPort(interfaceName: interfaceName)
-    }
-  }
-}
-
-//
-// Requests
-//
-
-/// The connections in use, against the limit; only accepted requests count.
-private final class AtdeccProxySlots: Sendable {
-  let capacity: Int
-  let inUse = Atomic(0)
-
-  init(capacity: Int) {
-    self.capacity = capacity
-  }
-}
-
-/// A connection's place against the limit, given back when the last reference to it goes:
-/// however the connection ends, or if FlyingFox never starts it.
-private final class AtdeccProxySlot: Sendable {
-  private let slots: AtdeccProxySlots
-
-  init?(_ slots: AtdeccProxySlots) {
-    guard slots.inUse.add(1, ordering: .relaxed).newValue <= slots.capacity else {
-      slots.inUse.subtract(1, ordering: .relaxed)
-      return nil
-    }
-    self.slots = slots
-  }
-
-  deinit {
-    slots.inUse.subtract(1, ordering: .relaxed)
-  }
-}
-
-/// WAITING_FOR_REQUEST (Clause C.5.2): every request.
-private struct AtdeccProxyRequestHandler<Port: NetworkPort>: HTTPHandler {
-  let configuration: AtdeccProxyServerConfiguration
-  let entityIDs: AtdeccProxyEntityIDs
-  let slots: AtdeccProxySlots
-  let makePort: @Sendable () throws -> Port
-  let logger: Logger
-
-  func handleRequest(_ request: HTTPRequest) async throws -> HTTPResponse {
+  /// WAITING_FOR_REQUEST (Clause C.5.2): every request.
+  public func handleRequest(_ request: HTTPRequest) async throws -> HTTPResponse {
     let outcome = appRequestOutcome(on: request, allowedWebSocketOrigins: configuration.allowedWebSocketOrigins)
     guard let transport = outcome.transport else {
       logger.debug("ATDECC proxy refused \(request.method.rawValue) \(request.path): \(outcome.requestValid)")
@@ -209,6 +112,132 @@ private struct AtdeccProxyRequestHandler<Port: NetworkPort>: HTTPHandler {
       let channel = AtdeccProxyWebSocket(session, logger: logger)
       return try await WebSocketHTTPHandler(handler: channel).handleRequest(request)
     }
+  }
+}
+
+public extension AtdeccProxyHandler where Port == EthernetPort {
+  /// An APS relaying to the Ethernet interface `interfaceName`, one AF_PACKET socket per
+  /// connection; throws if there is no such interface.
+  convenience init(
+    interfaceName: String,
+    configuration: AtdeccProxyConfiguration = .init(),
+    logger: Logger
+  ) throws {
+    let interface = try EthernetInterface(name: interfaceName)
+    self.init(configuration: configuration, linkMacAddress: interface.macAddress, logger: logger) {
+      try EthernetPort(interfaceName: interfaceName)
+    }
+  }
+}
+
+/// An APS on a TCP port of its own: one FlyingFox `HTTPServer` on the IPv6 wildcard, which
+/// accepts IPv4 too, passing the requests for `transports` to its handler.
+public final class AtdeccProxyServer<Port: NetworkPort>: Sendable {
+  /// The port as configured; 0 lets the kernel choose one (see `listeningPort()`).
+  public let port: UInt16
+  public let transports: Set<AppTransport>
+  public let handler: AtdeccProxyHandler<Port>
+  private let server: HTTPServer
+  private let logger: Logger
+
+  /// Listens on `port` at every address. Without `.connect` in `transports`, CONNECT is refused
+  /// 501, as without the HTTPTunnel trait; without `.webSocket`, every other request is 404.
+  public init(
+    port: UInt16 = AppDefaultPort,
+    transports: Set<AppTransport> = [.connect, .webSocket],
+    handler: AtdeccProxyHandler<Port>,
+    logger: Logger
+  ) {
+    self.port = port
+    self.transports = transports
+    self.handler = handler
+    self.logger = logger
+    #if HTTPTunnel
+    // FlyingFox's main branch, which the trait needs, bounds incoming WebSocket frames
+    let config = HTTPServer.Configuration(
+      address: sockaddr_in6.inet6(port: port),
+      webSocketMaxFrameSize: AppWebSocketMaximumMessageLength,
+      logger: AtdeccProxyHTTPLogging(logger: logger)
+    )
+    #else
+    let config = HTTPServer.Configuration(
+      address: sockaddr_in6.inet6(port: port),
+      logger: AtdeccProxyHTTPLogging(logger: logger)
+    )
+    #endif
+    server = HTTPServer(config: config, handler: AtdeccProxyTransportFilter(transports: transports, handler: handler))
+  }
+
+  /// Serves APCs until the task is cancelled, then closes every connection (FINISH). Throws if
+  /// the server cannot listen, or stops listening.
+  public func run() async throws {
+    // the port the kernel chose, if asked to choose
+    let announcement = Task { [self] in
+      try? await waitUntilListening()
+      if let port = await listeningPort() { logger.info("ATDECC proxy listening on TCP port \(port)") }
+    }
+    defer { announcement.cancel() }
+    try await server.run()
+  }
+
+  public func waitUntilListening(timeout: TimeInterval = 5) async throws {
+    try await server.waitUntilListening(timeout: timeout)
+  }
+
+  /// The port the server listens on, once listening.
+  public func listeningPort() async -> UInt16? {
+    switch await server.listeningAddress {
+    case let .ip4(_, port), let .ip6(_, port): port
+    default: nil
+    }
+  }
+}
+
+//
+// Requests
+//
+
+/// The requests an `AtdeccProxyServer` passes to its handler: those for its transports.
+private struct AtdeccProxyTransportFilter<Port: NetworkPort>: HTTPHandler {
+  let transports: Set<AppTransport>
+  let handler: AtdeccProxyHandler<Port>
+
+  func handleRequest(_ request: HTTPRequest) async throws -> HTTPResponse {
+    if request.method == .CONNECT, !transports.contains(.connect) {
+      return AppRequestOutcome.refusedConnect.refusal
+    }
+    if request.method != .CONNECT, !transports.contains(.webSocket) {
+      return AppRequestOutcome.refused(404).refusal
+    }
+    return try await handler.handleRequest(request)
+  }
+}
+
+/// The connections in use, against the limit; only accepted requests count.
+private final class AtdeccProxySlots: Sendable {
+  let capacity: Int
+  let inUse = Atomic(0)
+
+  init(capacity: Int) {
+    self.capacity = capacity
+  }
+}
+
+/// A connection's place against the limit, given back when the last reference to it goes:
+/// however the connection ends, or if FlyingFox never starts it.
+private final class AtdeccProxySlot: Sendable {
+  private let slots: AtdeccProxySlots
+
+  init?(_ slots: AtdeccProxySlots) {
+    guard slots.inUse.add(1, ordering: .relaxed).newValue <= slots.capacity else {
+      slots.inUse.subtract(1, ordering: .relaxed)
+      return nil
+    }
+    self.slots = slots
+  }
+
+  deinit {
+    slots.inUse.subtract(1, ordering: .relaxed)
   }
 }
 
