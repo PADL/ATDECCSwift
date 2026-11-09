@@ -24,7 +24,7 @@ import Synchronization
 
 /// Why an APC could not use an APS.
 public enum AtdeccProxyClientError: Error, Equatable, Sendable {
-  /// The APS refused CONNECT with this status.
+  /// The APS refused CONNECT with this status, and a WebSocket too if it was tried.
   case refused(Int)
   /// The APS closed the connection, or sent something that is not APP.
   case connectionClosed
@@ -39,7 +39,8 @@ public enum AtdeccProxyClientError: Error, Equatable, Sendable {
 /// another network or on iOS.
 ///
 /// It speaks CONNECT, as Annex C has it, or a WebSocket on `AppWebSocketPath`, which is all this
-/// package's APS speaks without its HTTPTunnel trait. DNS-SD doesn't say which an APS takes.
+/// package's APS speaks without its HTTPTunnel trait. DNS-SD doesn't say which an APS takes, so
+/// unless told, it tries CONNECT, and a WebSocket if the APS refuses it.
 ///
 /// The connection made by `init` is the first `receive(onReady:_:)`'s; each later one connects
 /// afresh, so the end station's retries reconnect to an APS that went away. The APS assigns
@@ -58,7 +59,6 @@ public final class AtdeccProxyClientPort: NetworkPort {
     let host: String
     let port: UInt16
     let path: String
-    let transport: AppTransport
 
     /// host:port, with an IPv6 literal in brackets.
     var authority: String {
@@ -71,25 +71,28 @@ public final class AtdeccProxyClientPort: NetworkPort {
     var pending: Link?
     /// The connection being received from, which sends go out on.
     var current: Link?
+    /// How the APS is reached; nil until it's found.
+    var transport: AppTransport?
   }
 
-  /// Connects to the APS at `host` and `port` by `transport`, and has it assign an entity ID.
-  /// `path` is what CONNECT asks for, the TXT record's path (Clause C.3.5) if DNS-SD found it.
+  /// Connects to the APS at `host` and `port` by `transport`, or whichever it takes if nil, and
+  /// has it assign an entity ID. `path` is what CONNECT asks for, the TXT record's path (Clause
+  /// C.3.5) if DNS-SD found it.
   public init(
     host: String,
     port: UInt16 = AppDefaultPort,
     path: String = "/",
-    transport: AppTransport = .connect
+    transport: AppTransport? = nil
   ) async throws {
-    endpoint = Endpoint(host: host, port: port, path: path, transport: transport)
-    let link = try await Self.connect(to: endpoint)
+    endpoint = Endpoint(host: host, port: port, path: path)
+    let (link, transport) = try await Self.connect(to: endpoint, by: transport)
     do {
       (entityID, macAddress) = try await link.requestEntityID(UniqueIdentifier(0))
     } catch {
       link.cancel()
       throw error
     }
-    state = Mutex(State(pending: link, current: nil))
+    state = Mutex(State(pending: link, current: nil, transport: transport))
   }
 
   deinit {
@@ -141,12 +144,12 @@ public final class AtdeccProxyClientPort: NetworkPort {
 
   /// The connection `init` made, or a new one that has asked for this port's entity ID again.
   private func nextLink() async throws -> Link {
-    let pending = state.withLock { state in
+    let (pending, transport) = state.withLock { state in
       defer { state.pending = nil }
-      return state.pending
+      return (state.pending, state.transport)
     }
     if let pending { return pending }
-    let link = try await Self.connect(to: endpoint)
+    let (link, _) = try await Self.connect(to: endpoint, by: transport)
     do {
       // another APC may hold the ID by now, and the controller can't take another
       guard try await link.requestEntityID(entityID).0 == entityID else {
@@ -159,37 +162,48 @@ public final class AtdeccProxyClientPort: NetworkPort {
     return link
   }
 
-  /// A connection by the endpoint's transport, ready for APPDUs.
-  private static func connect(to endpoint: Endpoint) async throws -> Link {
-    let link: Link
-    switch endpoint.transport {
-    case .connect:
-      link = Link(connection: NWConnection(
-        host: NWEndpoint.Host(endpoint.host),
-        port: NWEndpoint.Port(rawValue: endpoint.port) ?? .any,
-        using: tcpParameters
-      ), isWebSocket: false)
-    case .webSocket:
-      var components = URLComponents()
-      components.scheme = "ws"
-      components.host = endpoint.host
-      components.port = Int(endpoint.port)
-      components.path = AppWebSocketPath
-      guard let url = components.url else { throw AtdeccProxyClientError.connectionClosed }
-      let parameters = tcpParameters
-      let webSocket = NWProtocolWebSocket.Options()
-      webSocket.autoReplyPing = true
-      webSocket.maximumMessageSize = AppWebSocketMaximumMessageLength
-      parameters.defaultProtocolStack.applicationProtocols.insert(webSocket, at: 0)
-      link = Link(connection: NWConnection(to: .url(url), using: parameters), isWebSocket: true)
-    }
+  /// A connection by `transport`, ready for APPDUs, and the transport. With none, CONNECT is
+  /// tried, then a WebSocket if the APS refuses it.
+  private static func connect(to endpoint: Endpoint, by transport: AppTransport?) async throws -> (Link, AppTransport) {
+    if transport == .webSocket { return try await (connectByWebSocket(to: endpoint), .webSocket) }
+    let link = Link(connection: NWConnection(
+      host: NWEndpoint.Host(endpoint.host),
+      port: NWEndpoint.Port(rawValue: endpoint.port) ?? .any,
+      using: tcpParameters
+    ), isWebSocket: false)
+    let status: Int
     do {
-      if endpoint.transport == .connect {
-        let status = try await link.connect(path: endpoint.path, authority: endpoint.authority)
-        guard status == 200 else { throw AtdeccProxyClientError.refused(status) }
-      } else {
-        try await link.start()
-      }
+      status = try await link.connect(path: endpoint.path, authority: endpoint.authority)
+    } catch {
+      link.cancel()
+      throw error
+    }
+    if status == 200 { return (link, .connect) }
+    link.cancel()
+    guard transport == nil else { throw AtdeccProxyClientError.refused(status) }
+    do {
+      return try await (connectByWebSocket(to: endpoint), .webSocket)
+    } catch {
+      // a refused upgrade says less than a refused CONNECT does
+      throw AtdeccProxyClientError.refused(status)
+    }
+  }
+
+  private static func connectByWebSocket(to endpoint: Endpoint) async throws -> Link {
+    var components = URLComponents()
+    components.scheme = "ws"
+    components.host = endpoint.host
+    components.port = Int(endpoint.port)
+    components.path = AppWebSocketPath
+    guard let url = components.url else { throw AtdeccProxyClientError.connectionClosed }
+    let parameters = tcpParameters
+    let webSocket = NWProtocolWebSocket.Options()
+    webSocket.autoReplyPing = true
+    webSocket.maximumMessageSize = AppWebSocketMaximumMessageLength
+    parameters.defaultProtocolStack.applicationProtocols.insert(webSocket, at: 0)
+    let link = Link(connection: NWConnection(to: .url(url), using: parameters), isWebSocket: true)
+    do {
+      try await link.start()
     } catch {
       link.cancel()
       throw error
@@ -198,9 +212,11 @@ public final class AtdeccProxyClientPort: NetworkPort {
   }
 
   /// TCP with keepalives: an APS sends a NOP to an idle APC every ten seconds (Figure C.2),
-  /// but one that has gone silently says nothing at all.
+  /// but one that has gone silently says nothing at all. A connection that isn't made in a few
+  /// seconds fails, as one now and then sits preparing, and the end station's retry makes another.
   private static var tcpParameters: NWParameters {
     let tcp = NWProtocolTCP.Options()
+    tcp.connectionTimeout = 5
     tcp.noDelay = true
     tcp.enableKeepalive = true
     tcp.keepaliveIdle = 10
