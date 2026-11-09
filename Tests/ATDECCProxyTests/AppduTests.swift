@@ -16,6 +16,7 @@
 
 import ATDECC
 @testable import ATDECCProxy
+import BinaryParsing
 import FlyingFox
 import Foundation
 import IEEE802
@@ -61,6 +62,18 @@ final class AppduTests: XCTestCase {
       XCTAssertEqual(decoded.payload, appdu.payload)
     }
     XCTAssertEqual(try Appdu(bytes: appdus[1].serialized()).entityID, entityID)
+  }
+
+  /// Through the SerDes conformance, as the ATDECC PDUs are encoded and decoded.
+  func testAnAppduRoundTripsThroughSerializeAndParse() throws {
+    let appdu = Appdu.entityIDResponse(apcMacAddress: apcMacAddress, entityID: UniqueIdentifier(0x0011_2233_4455_6677))
+    var context = SerializationContext()
+    appdu.serialize(into: &context)
+    let parsed = try context.bytes.withParserSpan { try Appdu(parsing: &$0) }
+    XCTAssertEqual(parsed.messageType, .entityIDResponse)
+    XCTAssertEqual(macBytes(parsed.address), macBytes(apcMacAddress))
+    XCTAssertEqual(parsed.entityID, UniqueIdentifier(0x0011_2233_4455_6677))
+    XCTAssertEqual(parsed.payload, [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77])
   }
 
   func testMalformedAppdusAreRefused() {

@@ -29,24 +29,17 @@ import Synchronization
 ///
 /// An APC is given the ID it asks for unless it is known not to be unique: another APC of this
 /// server holds it, or an entity on the LAN advertises it (ENTITY_AVAILABLE, until its
-/// valid_time passes or it departs, IEEE 1722.1-2021 Clause 6.2.1.6). What the requesting
-/// APC itself advertised does not count, so an APC keeps its ID; what an APC advertised is
-/// forgotten when its connection closes, so one that reconnects keeps it too. Otherwise, or
-/// if it asks for none, it is given one derived from linkMac (Clause C.5.2.1.15) with a
-/// program ID (IEEE 1722.1-2021 Clause 6.2.1.8).
+/// valid_time passes or it departs, IEEE 1722.1-2021 Clause 6.2.1.6). What the requesting APC
+/// advertised itself does not count, and is forgotten when its connection closes, so an APC
+/// keeps its ID, reconnecting or not. Otherwise, or if it asks for none, it is given one
+/// derived from linkMac (Clause C.5.2.1.15) with a program ID (IEEE 1722.1-2021 Clause 6.2.1.8).
 public final class AtdeccProxyEntityIDs: Sendable {
-  /// An entity advertised on the LAN, until `expiry` (seconds on `clock`); `sender` is the
-  /// connection whose APC advertised it, if one did.
-  private struct Advertisement {
-    var expiry: UInt64
-    var sender: Int?
-  }
-
   private struct State {
     var held = [Int: UniqueIdentifier]()
-    var connections = Set<Int>()
     var nextConnection = 0
-    var advertised = [UniqueIdentifier: Advertisement]()
+    /// Advertised entities: until when (seconds on `clock`), and the connection whose APC
+    /// advertised one, if one did.
+    var advertised = [UniqueIdentifier: (expiry: UInt64, sender: Int?)]()
   }
 
   public let linkMacAddress: EUI48
@@ -57,13 +50,9 @@ public final class AtdeccProxyEntityIDs: Sendable {
   /// Program IDs start half the range away from those `EndStation.makeDynamicEntityID()`
   /// gives this process, so the APS's IDs keep clear of the host's own controllers. `clock`
   /// gives seconds, monotonic; by default from a `ContinuousClock`.
-  public init(
-    linkMacAddress: EUI48,
-    processID: Int32 = getpid(),
-    clock: (@Sendable () -> UInt64)? = nil
-  ) {
+  public init(linkMacAddress: EUI48, clock: (@Sendable () -> UInt64)? = nil) {
     self.linkMacAddress = linkMacAddress
-    let start = UInt32(dynamicEntityProgramID(processID: processID)) - 1 + 0x7FFE
+    let start = UInt32(dynamicEntityProgramID(processID: getpid())) - 1 + 0x7FFE
     firstProgramID = UInt16(start % 0xFFFD) + 1
     let origin = ContinuousClock.now
     self.clock = clock ?? { UInt64(max((ContinuousClock.now - origin).components.seconds, 0)) }
@@ -73,7 +62,6 @@ public final class AtdeccProxyEntityIDs: Sendable {
   public func makeConnection() -> Int {
     state.withLock { state in
       defer { state.nextConnection += 1 }
-      state.connections.insert(state.nextConnection)
       return state.nextConnection
     }
   }
@@ -93,20 +81,22 @@ public final class AtdeccProxyEntityIDs: Sendable {
   public func release(_ connection: Int) {
     state.withLock { state in
       state.held.removeValue(forKey: connection)
-      state.connections.remove(connection)
       state.advertised = state.advertised.filter { $0.value.sender != connection }
     }
   }
 
-  /// Observes an AVTPDU the APC of `connection` sent to the LAN, tracking its ADP advertisement.
-  public func observe(_ avtpdu: [UInt8], sentBy connection: Int) {
+  /// Observes an AVTPDU on the LAN: one the APC of `connection` sent, or with none, one
+  /// received (which, if an APC of this server sent it, stays that APC's).
+  public func observe(_ avtpdu: [UInt8], sentBy connection: Int? = nil) {
     guard let adpdu = try? Adpdu(bytes: avtpdu) else { return }
     let now = clock()
     state.withLock { state in
-      Self.prune(&state, at: now)
+      // the table holds only the LAN's current entities
+      state.advertised = state.advertised.filter { $0.value.expiry > now }
       switch adpdu.messageType {
       case .entityAvailable:
-        state.advertised[adpdu.entityID] = Advertisement(expiry: now + 2 * UInt64(adpdu.validTime), sender: connection)
+        let sender = connection ?? state.advertised[adpdu.entityID]?.sender
+        state.advertised[adpdu.entityID] = (now + 2 * UInt64(adpdu.validTime), sender)
       case .entityDeparting:
         state.advertised.removeValue(forKey: adpdu.entityID)
       case .entityDiscover:
@@ -115,32 +105,13 @@ public final class AtdeccProxyEntityIDs: Sendable {
     }
   }
 
-  /// Observes an AVTPDU received from the LAN, tracking its ADP advertisement. An advertisement
-  /// an APC of this server made, heard again through another connection's port, stays that APC's.
-  public func observe(_ avtpdu: [UInt8]) {
-    guard let adpdu = try? Adpdu(bytes: avtpdu) else { return }
-    let now = clock()
-    state.withLock { state in
-      Self.prune(&state, at: now)
-      switch adpdu.messageType {
-      case .entityAvailable:
-        let sender = state.advertised[adpdu.entityID]?.sender.flatMap { state.connections.contains($0) ? $0 : nil }
-        state.advertised[adpdu.entityID] = Advertisement(expiry: now + 2 * UInt64(adpdu.validTime), sender: sender)
-      case .entityDeparting:
-        state.advertised.removeValue(forKey: adpdu.entityID)
-      case .entityDiscover:
-        break
-      }
-    }
-  }
-
-  /// How many advertisements are held, expired ones included until the next is observed.
+  /// How many advertisements are held.
   var advertisementCount: Int {
     state.withLock { $0.advertised.count }
   }
 
   /// Whether `id` is known not to be unique for the APC of `connection`.
-  public func isInUse(_ id: UniqueIdentifier, for connection: Int) -> Bool {
+  func isInUse(_ id: UniqueIdentifier, for connection: Int) -> Bool {
     let now = clock()
     return state.withLock { Self.inUse($0, excluding: connection, at: now).contains(id) }
   }
@@ -152,12 +123,6 @@ public final class AtdeccProxyEntityIDs: Sendable {
     }
     ids.subtract(state.held[connection].map { [$0] } ?? [])
     return ids
-  }
-
-  /// Forgets advertisements whose valid_time has passed, so the table holds only the LAN's
-  /// current entities.
-  private static func prune(_ state: inout State, at now: UInt64) {
-    state.advertised = state.advertised.filter { $0.value.expiry > now }
   }
 
   private static func isAssignable(_ id: UniqueIdentifier) -> Bool {

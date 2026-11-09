@@ -15,6 +15,7 @@
 //
 
 import ATDECC
+import BinaryParsing
 import IEEE802
 
 /// The APP version this implementation speaks (IEEE 1722.1-2021 Clause C.4.1).
@@ -95,12 +96,19 @@ public struct Appdu: Sendable, CustomStringConvertible {
   /// An ENTITY_ID_REQUEST from an APC whose primary MAC address is `apcMacAddress`, for
   /// `entityID`, or zero for none (Clause C.5.1.2).
   public static func entityIDRequest(apcMacAddress: EUI48, entityID: UniqueIdentifier) -> Appdu {
-    Appdu(messageType: .entityIDRequest, address: apcMacAddress, payload: entityID.rawValue.bigEndianBytes)
+    Appdu(messageType: .entityIDRequest, address: apcMacAddress, payload: entityIDPayload(entityID))
   }
 
   /// An ENTITY_ID_RESPONSE assigning `entityID` to the APC at `apcMacAddress` (Clause C.5.1.3).
   public static func entityIDResponse(apcMacAddress: EUI48, entityID: UniqueIdentifier) -> Appdu {
-    Appdu(messageType: .entityIDResponse, address: apcMacAddress, payload: entityID.rawValue.bigEndianBytes)
+    Appdu(messageType: .entityIDResponse, address: apcMacAddress, payload: entityIDPayload(entityID))
+  }
+
+  /// The payload of ENTITY_ID_REQUEST and ENTITY_ID_RESPONSE (Table C.6).
+  private static func entityIDPayload(_ entityID: UniqueIdentifier) -> [UInt8] {
+    var context = SerializationContext()
+    context.serialize(uint64: entityID.rawValue)
+    return context.bytes
   }
 
   /// LINK_UP or LINK_DOWN for the network port at `linkMacAddress` (Clauses C.5.1.4, C.5.1.5).
@@ -123,47 +131,43 @@ public struct Appdu: Sendable, CustomStringConvertible {
     guard messageType == .entityIDRequest || messageType == .entityIDResponse, payload.count == 8 else {
       return nil
     }
-    return UniqueIdentifier(payload.reduce(UInt64(0)) { $0 << 8 | UInt64($1) })
+    return try? payload.withParserSpan { try UniqueIdentifier(parsing: &$0) }
   }
 
   /// The APPDU's octets. The payload must not exceed `maximumPayloadLength`: what arrives from
   /// the LAN is checked before it is put in an APPDU.
   public func serialized() -> [UInt8] {
     precondition(payload.count <= Self.maximumPayloadLength)
-    var bytes = [UInt8]()
-    bytes.reserveCapacity(Self.headerLength + payload.count)
-    bytes.append(version)
-    bytes.append(messageType.rawValue)
-    bytes.append(UInt8(truncatingIfNeeded: payload.count >> 8))
-    bytes.append(UInt8(truncatingIfNeeded: payload.count))
-    for i in 0..<6 {
-      bytes.append(address[i])
-    }
-    bytes.append(contentsOf: [0, 0]) // reserved
-    bytes.append(contentsOf: payload)
-    return bytes
+    var context = SerializationContext()
+    serialize(into: &context)
+    return context.bytes
   }
 
   /// The length of the APPDU at the start of `header`, the first `headerLength` octets of
   /// one, validating its version and payload_length.
   public static func length(ofHeader header: some Collection<UInt8>) throws(AppduError) -> Int {
-    guard header.count >= headerLength else { throw .truncated }
-    let bytes = Array(header.prefix(4))
-    guard bytes[0] == AppVersion else { throw .unsupportedVersion(bytes[0]) }
-    let payloadLength = Int(bytes[2]) << 8 | Int(bytes[3])
-    guard payloadLength <= maximumPayloadLength else { throw .payloadTooLong(payloadLength) }
-    return headerLength + payloadLength
+    let header = try parse(Array(header.prefix(headerLength))) { try Header(parsing: &$0) }
+    return headerLength + header.payloadLength
   }
 
   /// Parses one whole APPDU from `bytes`, which holds exactly its header and payload.
   public init(bytes: [UInt8]) throws(AppduError) {
-    let length = try Self.length(ofHeader: bytes)
-    guard bytes.count == length else { throw .truncated }
-    version = bytes[0]
-    messageType = AppMessageType(rawValue: bytes[1])
-    address = [bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9]]
-    payload = Array(bytes[Self.headerLength...])
-    try validatePayloadLength()
+    self = try Self.parse(bytes) { input in
+      let appdu = try Appdu(parsing: &input)
+      guard input.count == 0 else { throw AppduError.truncated }
+      return appdu
+    }
+  }
+
+  /// `body` over a parser of `bytes`, running out of which is `.truncated`.
+  private static func parse<T>(_ bytes: [UInt8], _ body: (inout ParserSpan) throws -> T) throws(AppduError) -> T {
+    do {
+      return try bytes.withParserSpan(body)
+    } catch let error as AppduError {
+      throw error
+    } catch {
+      throw .truncated
+    }
   }
 
   /// The payload lengths Table C.6 fixes.
@@ -180,6 +184,45 @@ public struct Appdu: Sendable, CustomStringConvertible {
 
   public var description: String {
     "Appdu(\(messageType), address: \(_macAddressToString(address)), payloadLength: \(payload.count))"
+  }
+}
+
+extension Appdu {
+  /// The APP header (Figure C.1), validated: version 0 and a payload of at most 1500 octets.
+  private struct Header {
+    var messageType: AppMessageType
+    var payloadLength: Int
+    var address: EUI48
+
+    init(parsing input: inout ParserSpan) throws {
+      let version = try UInt8(parsing: &input)
+      guard version == AppVersion else { throw AppduError.unsupportedVersion(version) }
+      messageType = try AppMessageType(rawValue: UInt8(parsing: &input))
+      payloadLength = try Int(UInt16(parsingBigEndian: &input))
+      guard payloadLength <= Appdu.maximumPayloadLength else { throw AppduError.payloadTooLong(payloadLength) }
+      address = try _eui48(parsing: &input)
+      _ = try UInt16(parsingBigEndian: &input) // reserved
+    }
+  }
+
+  public init(parsing input: inout ParserSpan) throws {
+    let header = try Header(parsing: &input)
+    guard input.count >= header.payloadLength else { throw AppduError.truncated }
+    self.init(
+      messageType: header.messageType,
+      address: header.address,
+      payload: try Array(parsing: &input, byteCount: header.payloadLength)
+    )
+    try validatePayloadLength()
+  }
+
+  public func serialize(into context: inout SerializationContext) {
+    context.serialize(uint8: version)
+    context.serialize(uint8: messageType.rawValue)
+    context.serialize(uint16: UInt16(payload.count))
+    context.serialize(eui48: address)
+    context.serialize(uint16: 0) // reserved
+    context.serialize(payload)
   }
 }
 
@@ -221,10 +264,4 @@ public let AppAvtpduSubtypes: ClosedRange<UInt8> = AvtpSubtype.adp.rawValue...Av
 public func isAppAvtpdu(_ avtpdu: some Collection<UInt8>) -> Bool {
   guard avtpdu.count >= AvtpduControlHeader.length, let subtype = avtpdu.first else { return false }
   return AppAvtpduSubtypes.contains(subtype)
-}
-
-extension UInt64 {
-  var bigEndianBytes: [UInt8] {
-    (0..<8).map { UInt8(truncatingIfNeeded: self >> (56 - 8 * $0)) }
-  }
 }

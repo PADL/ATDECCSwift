@@ -42,7 +42,7 @@ final class ProxyServerStateMachineTests: XCTestCase {
   private var entityIDs: AtdeccProxyEntityIDs!
 
   override func setUp() {
-    entityIDs = AtdeccProxyEntityIDs(linkMacAddress: linkMacAddress, processID: 1234)
+    entityIDs = AtdeccProxyEntityIDs(linkMacAddress: linkMacAddress)
   }
 
   private func makeMachine(linkStatus: Bool = true, connection: Int? = nil) -> AtdeccProxyServerStateMachine {
@@ -243,7 +243,7 @@ final class EntityIDTrackingTests: XCTestCase {
   private let lanID = UniqueIdentifier(0x0200_00FF_FE00_0042)
 
   override func setUp() {
-    entityIDs = AtdeccProxyEntityIDs(linkMacAddress: linkMacAddress, processID: 1234) { [clock] in clock.now.withLock { $0 } }
+    entityIDs = AtdeccProxyEntityIDs(linkMacAddress: linkMacAddress) { [clock] in clock.now.withLock { $0 } }
   }
 
   private func advance(to time: UInt64) { clock.now.withLock { $0 = time } }

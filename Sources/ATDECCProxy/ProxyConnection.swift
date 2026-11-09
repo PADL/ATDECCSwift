@@ -19,11 +19,10 @@ import IEEE802
 import Logging
 import Synchronization
 
-/// Messages queued for an APC beyond which it is not keeping up, and its connection is closed.
+/// Messages queued for an APC beyond which it is not reading them, and its connection ends.
 let AppOutputCapacity = 256
-/// Frames queued for the network port, or events for a connection, beyond which more are
-/// dropped, as a congested LAN drops them.
-private let _layer2OutputCapacity = 256
+/// Events queued for a connection beyond which more are dropped, as a congested LAN drops
+/// frames.
 private let _eventCapacity = 1024
 
 /// One APC's connection, whatever carries it: its APS state machine (IEEE 1722.1-2021 Clause
@@ -31,8 +30,8 @@ private let _eventCapacity = 1024
 /// and a one-second clock (Clause C.5.2.1.4), handled one at a time.
 ///
 /// The transport feeds `deliver(_:)` and `apcClosed(closeCode:)`, and writes `output` to the
-/// APC until it ends. The HTTP response that starts the transfer (or refuses it) is the
-/// transport's: a connection exists only for an accepted request.
+/// APC until it ends. The HTTP response that starts the transfer is the transport's: a
+/// connection exists only for an accepted request.
 final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
   enum Output: Sendable {
     case appdu(Appdu)
@@ -62,8 +61,8 @@ final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
   private let abort = Mutex<(@Sendable () -> ())?>(nil)
 
   init(port: Port, entityIDs: AtdeccProxyEntityIDs, logger: Logger) {
-    (output, outputSink) = AsyncStream<Output>.makeStream(bufferingPolicy: .bufferingOldest(AppOutputCapacity))
-    (events, eventSink) = AsyncStream<Event>.makeStream(bufferingPolicy: .bufferingOldest(_eventCapacity))
+    (output, outputSink) = AsyncStream.makeStream(bufferingPolicy: .bufferingOldest(AppOutputCapacity))
+    (events, eventSink) = AsyncStream.makeStream(bufferingPolicy: .bufferingOldest(_eventCapacity))
     self.port = port
     self.entityIDs = entityIDs
     self.logger = logger
@@ -94,24 +93,21 @@ final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
 
   /// Runs the connection until CLOSED, then ends `output`.
   func run() async {
-    let (layer2Output, layer2Sink) = AsyncStream<IEEE802Packet>.makeStream(bufferingPolicy: .bufferingOldest(_layer2OutputCapacity))
     let key = entityIDs.makeConnection()
     defer { entityIDs.release(key) }
     await withTaskGroup { group in
-      group.addTask { [self] in await writeLayer2(layer2Output) }
       group.addTask { [self] in await monitorLink() }
       group.addTask { [self] in await receiveLayer2() }
       group.addTask { [self] in await tick() }
-      await drive(key: key, layer2Sink)
+      await drive(key: key)
       outputSink.finish()
-      layer2Sink.finish()
       eventSink.finish()
       group.cancelAll()
     }
   }
 
   /// The state machine, from the accepted request on; ends at CLOSED.
-  private func drive(key: Int, _ layer2: AsyncStream<IEEE802Packet>.Continuation) async {
+  private func drive(key: Int) async {
     let start = ContinuousClock.now
     var currentTime: UInt64 { UInt64(max((ContinuousClock.now - start).components.seconds, 0)) }
     var iterator = events.makeAsyncIterator()
@@ -130,12 +126,12 @@ final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
       [entityIDs] _, requested in entityIDs.assign(key, requested: requested)
     }
     var closeCode: UInt16? = 1000
-    guard perform(machine.requestReceived(200, at: currentTime), key: key, closeCode, layer2) else { return }
+    guard await perform(machine.requestReceived(200, at: currentTime), key: key, closeCode) else { return }
     for event in pending {
-      guard perform(handle(event, &machine, &closeCode, at: currentTime), key: key, closeCode, layer2) else { return }
+      guard await perform(handle(event, &machine, &closeCode, at: currentTime), key: key, closeCode) else { return }
     }
     while let event = await iterator.next() {
-      guard perform(handle(event, &machine, &closeCode, at: currentTime), key: key, closeCode, layer2) else { return }
+      guard await perform(handle(event, &machine, &closeCode, at: currentTime), key: key, closeCode) else { return }
     }
   }
 
@@ -147,11 +143,7 @@ final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
   ) -> [AtdeccProxyServerStateMachine.Action] {
     switch event {
     case let .apc(appdu):
-      let actions = machine.apcMessageReceived(appdu, at: currentTime)
-      if appdu.messageType == .entityIDRequest, let id = machine.assignedEntityID {
-        logger.debug("ATDECC proxy assigned entity ID \(id)")
-      }
-      return actions
+      return machine.apcMessageReceived(appdu, at: currentTime)
     case let .apcClosed(code):
       closeCode = code
       return machine.close()
@@ -167,12 +159,7 @@ final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
 
   /// Performs `actions`; false once the connection is to close. An APC whose messages back up
   /// is not reading them, and its connection is ended.
-  private func perform(
-    _ actions: [AtdeccProxyServerStateMachine.Action],
-    key: Int,
-    _ closeCode: UInt16?,
-    _ layer2: AsyncStream<IEEE802Packet>.Continuation
-  ) -> Bool {
+  private func perform(_ actions: [AtdeccProxyServerStateMachine.Action], key: Int, _ closeCode: UInt16?) async -> Bool {
     for action in actions {
       switch action {
       case .sendHttpResponse:
@@ -186,8 +173,10 @@ final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
         }
       case let .sendToLayer2(packet):
         entityIDs.observe(packet.payload, sentBy: key)
-        if case .dropped = layer2.yield(packet) {
-          logger.trace("ATDECC proxy dropped a frame for the LAN")
+        do {
+          try await port.send(packet)
+        } catch {
+          logger.debug("ATDECC proxy could not send a frame: \(error)")
         }
       case .closeConnection:
         close(closeCode: closeCode)
@@ -199,17 +188,6 @@ final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
 
   private func close(closeCode: UInt16?) {
     outputSink.yield(.close(closeCode: closeCode))
-  }
-
-  /// Frames for the network port, sent in order; one that fails is dropped, as on a LAN.
-  private func writeLayer2(_ output: AsyncStream<IEEE802Packet>) async {
-    for await packet in output {
-      do {
-        try await port.send(packet)
-      } catch {
-        logger.debug("ATDECC proxy could not send a frame: \(error)")
-      }
-    }
   }
 
   private func receiveLayer2() async {

@@ -167,15 +167,10 @@ final class ProxyServerTests: XCTestCase {
     _ = await serverTask.result
   }
 
-  private func startServer(maximumConnections: Int, writeTimeout: Duration = .seconds(10)) async throws {
-    let configuration = AtdeccProxyServerConfiguration(
-      port: 0,
-      addresses: ["127.0.0.1"],
-      maximumConnections: maximumConnections,
-      writeTimeout: writeTimeout
-    )
+  private func startServer(maximumConnections: Int) async throws {
+    let configuration = AtdeccProxyServerConfiguration(port: 0, maximumConnections: maximumConnections)
     let network = network!
-    server = try AtdeccProxyServer(configuration: configuration, linkMacAddress: linkMacAddress, logger: Logger(label: "test")) {
+    server = AtdeccProxyServer(configuration: configuration, linkMacAddress: linkMacAddress, logger: Logger(label: "test")) {
       [connectionPorts] in
       let port = network.makePort(macAddress: linkMacAddress)
       connectionPorts.ports.withLock { $0.append(port) }
@@ -183,7 +178,7 @@ final class ProxyServerTests: XCTestCase {
     }
     serverTask = Task { [server] in try await server!.run() }
     try await server.waitUntilListening()
-    guard let port = await server.listeningPorts().first else { throw POSIXError(.EADDRNOTAVAIL) }
+    guard let port = await server.listeningPort() else { throw POSIXError(.EADDRNOTAVAIL) }
     self.port = port
   }
 
@@ -439,55 +434,6 @@ final class ProxyServerTests: XCTestCase {
     XCTAssertNotEqual(response.entityID, lanID)
   }
 
-  #if HTTPTunnel
-  /// The CONNECT transport's write timeout; FlyingFox's WebSocket writes have none.
-  func testAnApcThatStopsReadingIsDisconnected() async throws {
-    serverTask.cancel()
-    _ = await serverTask.result
-    try await startServer(maximumConnections: 8, writeTimeout: .milliseconds(500))
-    let apc = try await TestApc(port: port, receiveBufferSize: 2048)
-    try await apc.send(testConnectRequest(port: port))
-    _ = try await apc.readHead()
-    // the APC reads nothing more while the LAN floods it, steadily enough that the connection's
-    // queues, bounded and dropping what overflows, keep it writing
-    for _ in 0..<80 {
-      for _ in 0..<50 {
-        try await entitySends(makeAvtpdu())
-      }
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    try await Task.sleep(for: .seconds(2))
-    // what was buffered, then the end of the connection rather than a timeout
-    let start = ContinuousClock.now
-    _ = try await apc.readToEnd()
-    XCTAssertLessThan(ContinuousClock.now - start, .seconds(4))
-  }
-  #endif
-
-  /// The listeners follow the addresses given, as a device's do when its own change.
-  func testListenersFollowTheAddressesGiven() async throws {
-    let apc = try await TestApc(port: port)
-    let head = try await apc.open(port: port)
-    XCTAssertTrue(Self.isAccepted(head), head)
-
-    try server.setAddresses(["127.0.0.2"])
-    try await server.waitUntilListening()
-    guard let newPort = await server.listeningPorts().first else { return XCTFail("not listening") }
-    let moved = try await TestApc(port: newPort, host: "127.0.0.2")
-    let movedHead = try await moved.open(port: newPort)
-    XCTAssertTrue(Self.isAccepted(movedHead), movedHead)
-    // the listener at the address no longer given has gone, with its connection
-    _ = try? await apc.readToEnd()
-    do {
-      _ = try await TestApc(port: port)
-      XCTFail("still listening at 127.0.0.1")
-    } catch {}
-    do {
-      try server.setAddresses(["not an address"])
-      XCTFail("an address that is not an IP literal is refused")
-    } catch {}
-  }
-
   func testTheLinkGoingDownIsReported() async throws {
     let apc = try await TestApc(port: port)
     try await apc.open(port: port)
@@ -516,6 +462,37 @@ private final class SilentPort: NetworkPort {
 }
 
 final class ProxyConnectionTests: XCTestCase {
+  /// An APC that reads nothing while the LAN keeps sending has its connection ended once
+  /// `AppOutputCapacity` messages are queued for it.
+  func testAnApcThatStopsReadingIsDisconnected() async throws {
+    let network = VirtualNetwork()
+    let entity = network.makePort(macAddress: entityMacAddress)
+    let connection = AtdeccProxyConnection(
+      port: network.makePort(macAddress: linkMacAddress),
+      entityIDs: AtdeccProxyEntityIDs(linkMacAddress: linkMacAddress),
+      logger: Logger(label: "test")
+    )
+    let aborted = AsyncStream<()>.makeStream()
+    connection.onAbort { aborted.continuation.yield() }
+    let run = Task { await connection.run() }
+    var iterator = aborted.stream.makeAsyncIterator()
+    let flood = Task {
+      while !Task.isCancelled {
+        try await entity.send(IEEE802Packet(
+          destMacAddress: AvdeccMulticastMacAddress,
+          tci: nil,
+          sourceMacAddress: entityMacAddress,
+          etherType: AvtpEtherType,
+          payload: makeAvtpdu()
+        ))
+        await Task.yield()
+      }
+    }
+    await iterator.next()
+    flood.cancel()
+    await run.value
+  }
+
   /// An APC that closes its WebSocket before the transfer starts is answered with its close.
   func testAnEarlyCloseIsAnswered() async throws {
     let connection = AtdeccProxyConnection(

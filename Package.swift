@@ -92,6 +92,7 @@ let package = Package(
         "ATDECC",
         .product(name: "IEEE802", package: "IEEE802Swift"),
         .product(name: "IEEE802Linux", package: "IEEE802Swift", condition: .when(platforms: [.linux])),
+        .product(name: "BinaryParsing", package: "swift-binary-parsing"),
         // HTTP CONNECT and WebSocket; the layer 2 side is ATDECC's own ports
         .product(name: "FlyingFox", package: "FlyingFox"),
         .product(name: "FlyingSocks", package: "FlyingFox"),
@@ -159,6 +160,7 @@ let package = Package(
       dependencies: [
         "ATDECC",
         "ATDECCProxy",
+        .product(name: "BinaryParsing", package: "swift-binary-parsing"),
         .product(name: "IEEE802", package: "IEEE802Swift"),
         .product(name: "SocketAddress", package: "SocketAddress", condition: .when(platforms: [.linux])),
         .product(name: "IORing", package: "IORingSwift", condition: .when(platforms: [.linux])),
