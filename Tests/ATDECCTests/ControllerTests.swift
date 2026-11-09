@@ -355,6 +355,28 @@ private final class FailedPort: NetworkPort {
   }
 }
 
+/// Sends CONNECT_RX from a controller on `port`, which is expected to fail.
+private func connectOnce(on port: some NetworkPort) async throws {
+  let endStation = EndStation(port: port, logger: Logger(label: "ControllerTests"))
+  var timing = ControllerTiming()
+  timing.acmpCommandTimeouts = .milan
+  let controller = try await Controller(
+    endStation: endStation,
+    entityID: controllerEntityID,
+    timing: timing
+  )
+  do {
+    _ = try await controller.connectStream(talker: talkerStream, listener: listenerStream)
+    XCTFail("expected CONNECT_RX to fail")
+  } catch {}
+  await controller.close()
+  await endStation.close()
+}
+
+private let isConnectRxCommand: @Sendable (AvdeccPdu) -> Bool = { pdu in
+  if case let .acmp(acmpdu) = pdu { acmpdu.messageType == .connectRxCommand } else { false }
+}
+
 private func isCommand(_ commandType: AemCommandType) -> @Sendable (AvdeccPdu) -> Bool {
   { pdu in
     if case let .aecp(.aem(aem)) = pdu { !aem.isResponse && aem.commandType == commandType } else { false }
@@ -366,6 +388,37 @@ private let talkerStream = StreamIdentification(
   streamIndex: 0
 )
 private let listenerStream = StreamIdentification(entityID: entityID, streamIndex: 0)
+
+/// A port that, like an AF_PACKET socket opened once its link is reported up, hears nothing
+/// sent before its reception begins, `receptionDelay` after it is asked to.
+private struct LateReceivingPort: NetworkPort {
+  let network: VirtualNetwork
+  let sender: VirtualPort
+  let receptionDelay: Duration
+
+  init(network: VirtualNetwork, receptionDelay: Duration) {
+    self.network = network
+    sender = network.makePort(macAddress: controllerMacAddress)
+    self.receptionDelay = receptionDelay
+  }
+
+  var macAddress: EUI48 { controllerMacAddress }
+
+  func send(_ packet: IEEE802Packet) async throws {
+    try await sender.send(packet)
+  }
+
+  func receive(_ handler: (IEEE802Packet) async -> ()) async throws {
+    try await receive(onReady: {}, handler)
+  }
+
+  func receive(onReady: () async -> (), _ handler: (IEEE802Packet) async -> ()) async throws {
+    try await Task.sleep(for: receptionDelay)
+    let receiver = network.makePort(macAddress: controllerMacAddress)
+    defer { receiver.close() }
+    try await receiver.receive(onReady: onReady, handler)
+  }
+}
 
 private final class EventCount: Sendable {
   let value = Mutex(0)
@@ -1062,6 +1115,96 @@ final class ControllerTests: XCTestCase {
     } catch {}
     XCTAssertLessThan(ContinuousClock.now - start, .milliseconds(1500))
     await controller.close()
+  }
+
+  /// A controller's first command is sent once its end station receives, so that its response
+  /// is heard rather than lost, and the command retried after its timeout.
+  func testFirstAcmpCommandIsAnswered() async throws {
+    let port = LateReceivingPort(network: network, receptionDelay: .milliseconds(50))
+    let endStation = EndStation(port: port, logger: Logger(label: "ControllerTests"))
+    let controller = try await Controller(endStation: endStation, entityID: controllerEntityID)
+    let command = Task {
+      try await controller.connectStream(talker: talkerStream, listener: listenerStream)
+    }
+    // a retry would come only after CONNECT_RX's 4.5 s timeout
+    guard case let .success(state)? = await result(of: command) else {
+      return XCTFail("CONNECT_RX not answered at once")
+    }
+    XCTAssertEqual(state.connectionCount, 1)
+    XCTAssertEqual(entity.receivedCount(where: isConnectRxCommand), 1)
+    await controller.close()
+    await endStation.close()
+  }
+
+  /// A first command on a port whose link is down, or whose reception fails, is sent, and
+  /// times out, rather than waiting for reception.
+  func testFirstAcmpCommandOnAPortThatDoesNotReceive() async throws {
+    let downPort = network.makePort(macAddress: controllerMacAddress)
+    downPort.setLinkUp(false)
+    let starts = [
+      Task { try await connectOnce(on: downPort) },
+      Task { try await connectOnce(on: FailedPort()) },
+    ]
+    for start in starts {
+      if case .success? = await result(of: start) { continue }
+      XCTFail("CONNECT_RX did not complete")
+      start.cancel()
+    }
+  }
+
+  /// A controller started on an end station whose link is already down does not wait for it.
+  func testLaterControllerOnADownLinkDoesNotWait() async throws {
+    let port = network.makePort(macAddress: controllerMacAddress)
+    port.setLinkUp(false)
+    let endStation = EndStation(port: port, logger: Logger(label: "ControllerTests"))
+    let first = try await Controller(endStation: endStation, entityID: controllerEntityID)
+    while await !endStation.hasFirstReceptionSettled {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    var timing = ControllerTiming()
+    timing.acmpCommandTimeouts = .milan
+    let second = try await Controller(
+      endStation: endStation,
+      entityID: UniqueIdentifier(0x0200_00FF_FE00_0011),
+      timing: timing
+    )
+    let command = Task {
+      try await second.connectStream(talker: talkerStream, listener: listenerStream)
+    }
+    switch await result(of: command) {
+    case .failure(AcmpStatus.timedOut): break
+    case let result: XCTFail("expected TIMED_OUT, got \(String(describing: result))")
+    }
+    await second.close()
+    await first.close()
+    await endStation.close()
+  }
+
+  /// A command waiting for the end station to first receive can be cancelled, and fails when
+  /// the controller is closed.
+  func testAcmpCommandWaitingForReceptionEnds() async throws {
+    let port = LateReceivingPort(network: network, receptionDelay: .seconds(10))
+    let endStation = EndStation(port: port, logger: Logger(label: "ControllerTests"))
+    let controller = try await Controller(endStation: endStation, entityID: controllerEntityID)
+    let cancelled = Task {
+      try await controller.connectStream(talker: talkerStream, listener: listenerStream)
+    }
+    let closed = Task {
+      try await controller.connectStream(talker: talkerStream, listener: listenerStream)
+    }
+    try await Task.sleep(for: .milliseconds(50))
+    cancelled.cancel()
+    switch await result(of: cancelled) {
+    case .failure(is CancellationError): break
+    case let result: XCTFail("expected CancellationError, got \(String(describing: result))")
+    }
+    await controller.close()
+    switch await result(of: closed) {
+    case .failure(AcmpStatus.internalError): break
+    case let result: XCTFail("expected INTERNAL_ERROR, got \(String(describing: result))")
+    }
+    XCTAssertEqual(entity.receivedCount(where: isConnectRxCommand), 0)
+    await endStation.close()
   }
 
   // a bind can request connection flags such as STREAMING_WAIT (IEEE 1722.1-2021 Table 8-4)

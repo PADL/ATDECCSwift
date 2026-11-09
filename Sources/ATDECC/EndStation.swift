@@ -80,6 +80,8 @@ public actor EndStation<Port: NetworkPort> {
   private var _isClosed = false
   /// Whether the port is receiving, so that answers to an ENTITY_DISCOVER would be heard.
   private(set) var isReceiving = false
+  /// Whether the port has first received, failed to, or been found to have its link down.
+  private(set) var hasFirstReceptionSettled = false
 
   public init(port: Port, logger: Logger = Logger(label: "com.padl.AVDECCSwift")) {
     self.port = port
@@ -104,6 +106,7 @@ public actor EndStation<Port: NetworkPort> {
     _linkStateTask?.cancel()
     _linkStateTask = nil
     _controllers = [:]
+    hasFirstReceptionSettled = true
   }
 
   // MARK: - Entity IDs
@@ -232,6 +235,7 @@ public actor EndStation<Port: NetworkPort> {
   private func _receptionBegan() async {
     guard !_isClosed, !Task.isCancelled else { return }
     isReceiving = true
+    hasFirstReceptionSettled = true
     for controller in _liveControllers {
       await controller._handleReceptionBegan()
     }
@@ -257,6 +261,7 @@ public actor EndStation<Port: NetworkPort> {
       _startReceiving()
     } else {
       _stopReceiving()
+      hasFirstReceptionSettled = true
     }
     for controller in _liveControllers {
       await controller._handleLinkState(isUp: isUp)
@@ -273,6 +278,7 @@ public actor EndStation<Port: NetworkPort> {
   /// `isRepeated` if nothing has been received since reception last ended.
   private func _receiveEnded(failure: (any Error)?, isRepeated: Bool) async {
     isReceiving = false
+    hasFirstReceptionSettled = true
     guard !_isClosed else { return }
     let reason = failure.map { "receive failed: \($0)" } ?? "reception ended"
     guard !isRepeated else {
