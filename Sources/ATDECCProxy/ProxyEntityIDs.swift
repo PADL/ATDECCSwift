@@ -148,6 +148,10 @@ public final class AtdeccProxyEntityIDs: Sendable {
 public let AppServiceType = "_avdecc._tcp"
 /// The TCP port IANA assigned to APP (Table C.1).
 public let AppDefaultPort: UInt16 = 17221
+/// The DNS-SD service type of an APS's WebSocket form, on `AppWebSocketPath` of an HTTP port.
+/// It is PADL's own, as OCP.1's `_ocaws._tcp` is, not an IANA registration; its TXT record is
+/// `appServiceTXTRecord`'s with `path` set to `AppWebSocketPath`.
+public let AppWebSocketServiceType = "_avdeccws._tcp"
 
 /// What an APS forwards (Clause C.3.7, Table C.3).
 public enum AppServerMode: Int, Sendable {

@@ -138,6 +138,13 @@ final class AppduTests: XCTestCase {
     XCTAssertEqual(AppServiceType, "_avdecc._tcp")
     XCTAssertEqual(AppDefaultPort, 17221)
   }
+
+  func testWebSocketServiceRecordKeepsTableC2AndNamesItsPath() {
+    let record = appServiceTXTRecord(description: "Bridge", manufacturer: "PADL", path: AppWebSocketPath)
+    XCTAssertEqual(record.map(\.0), ["txtvers", "Version", "Priority", "Description", "Manufacturer", "path", "Mode"])
+    XCTAssertEqual(record.map(\.1), ["1", "0", "0", "Bridge", "PADL", "/ws", "0"])
+    XCTAssertEqual(AppWebSocketServiceType, "_avdeccws._tcp")
+  }
 }
 
 final class AppRequestTests: XCTestCase {
