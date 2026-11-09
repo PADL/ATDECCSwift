@@ -23,13 +23,13 @@ public enum AppTransport: Sendable, Equatable {
   case webSocket(key: String)
 }
 
-/// The APS's verdict on an APC's HTTP request: requestValid in IEEE 1722.1-2021 Clause
+/// The outcome of an APC's HTTP request at the APS: requestValid in IEEE 1722.1-2021 Clause
 /// C.5.2.1.14, the transport if it is accepted (200), and the response to send.
 ///
 /// Over WebSocket the opening handshake (RFC 6455 Section 4) stands in for CONNECT: an upgrade
 /// the APS accepts is requestValid == 200, answered 101 rather than 200; one it refuses is the
 /// status it is refused with.
-public struct AppRequestVerdict: Sendable, Equatable {
+public struct AppRequestOutcome: Sendable, Equatable {
   public var requestValid: Int
   public var transport: AppTransport?
   public var extraHeaders: [String]
@@ -62,18 +62,18 @@ public struct AppRequestVerdict: Sendable, Equatable {
 /// Decides an APC's request. CONNECT is accepted on any target, as the Noodles/Sienda proxy
 /// does, since the advertised path is "/" (Clause C.3.5); a WebSocket upgrade only on
 /// `AppWebSocketPath`, and only from an allowed origin.
-public func appVerdict(on head: AppHTTPRequestHead, allowedWebSocketOrigins: [String]) -> AppRequestVerdict {
+public func appRequestOutcome(on head: AppHTTPRequestHead, allowedWebSocketOrigins: [String]) -> AppRequestOutcome {
   guard head.version == "HTTP/1.1" || head.version == "HTTP/1.0" else { return .refused(505) }
   if head.method == "CONNECT" {
-    return AppRequestVerdict(requestValid: 200, transport: .connect, extraHeaders: [])
+    return AppRequestOutcome(requestValid: 200, transport: .connect, extraHeaders: [])
   }
   let path = head.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? head.target
   guard path == AppWebSocketPath else { return .refused(404) }
   guard head.method == "GET" else { return .refused(405, ["Allow: GET"]) }
-  return webSocketVerdict(on: head, allowedOrigins: allowedWebSocketOrigins)
+  return webSocketOutcome(on: head, allowedOrigins: allowedWebSocketOrigins)
 }
 
-private func webSocketVerdict(on head: AppHTTPRequestHead, allowedOrigins: [String]) -> AppRequestVerdict {
+private func webSocketOutcome(on head: AppHTTPRequestHead, allowedOrigins: [String]) -> AppRequestOutcome {
   guard head.header("Upgrade", containsToken: "websocket"), head.header("Connection", containsToken: "upgrade"),
         let key = head.header("Sec-WebSocket-Key"), !key.isEmpty
   else {
@@ -85,5 +85,5 @@ private func webSocketVerdict(on head: AppHTTPRequestHead, allowedOrigins: [Stri
   guard isAllowedWebSocketOrigin(head.header("Origin"), host: head.header("Host"), allowedHosts: allowedOrigins) else {
     return .refused(403)
   }
-  return AppRequestVerdict(requestValid: 200, transport: .webSocket(key: key), extraHeaders: [])
+  return AppRequestOutcome(requestValid: 200, transport: .webSocket(key: key), extraHeaders: [])
 }

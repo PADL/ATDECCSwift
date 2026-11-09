@@ -142,9 +142,9 @@ final class AppHTTPTests: XCTestCase {
     XCTAssertEqual(String(decoding: request.serialized(), as: UTF8.self), "CONNECT / HTTP/1.1\r\nHost: brohavn:17221\r\n\r\n")
     let parsed = AppHTTPRequestHead(bytes: request.serialized())
     XCTAssertEqual(parsed, request)
-    let verdict = appVerdict(on: request, allowedWebSocketOrigins: [])
-    XCTAssertEqual(verdict.requestValid, 200)
-    XCTAssertEqual(String(decoding: verdict.response, as: UTF8.self), "HTTP/1.1 200 OK\r\n\r\n")
+    let outcome = appRequestOutcome(on: request, allowedWebSocketOrigins: [])
+    XCTAssertEqual(outcome.requestValid, 200)
+    XCTAssertEqual(String(decoding: outcome.response, as: UTF8.self), "HTTP/1.1 200 OK\r\n\r\n")
   }
 
   func testRequestHeadEndIsFound() {
@@ -156,23 +156,23 @@ final class AppHTTPTests: XCTestCase {
   }
 
   func testOtherRequestsAreRefused() {
-    XCTAssertEqual(appVerdict(on: head("GET / HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 404)
-    let post = appVerdict(on: head("POST /ws HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: [])
+    XCTAssertEqual(appRequestOutcome(on: head("GET / HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 404)
+    let post = appRequestOutcome(on: head("POST /ws HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: [])
     XCTAssertEqual(post.requestValid, 405)
     XCTAssertTrue(String(decoding: post.response, as: UTF8.self).contains("\r\nAllow: GET\r\n"))
-    XCTAssertEqual(appVerdict(on: head("POST / HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 404)
-    XCTAssertEqual(appVerdict(on: head("CONNECT / HTTP/2.0\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 505)
-    XCTAssertEqual(appVerdict(on: head("GET /ws HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 426)
-    let refusal = String(decoding: appVerdict(on: head("GET / HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).response, as: UTF8.self)
+    XCTAssertEqual(appRequestOutcome(on: head("POST / HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 404)
+    XCTAssertEqual(appRequestOutcome(on: head("CONNECT / HTTP/2.0\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 505)
+    XCTAssertEqual(appRequestOutcome(on: head("GET /ws HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 426)
+    let refusal = String(decoding: appRequestOutcome(on: head("GET / HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).response, as: UTF8.self)
     XCTAssertEqual(refusal, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
   }
 
   /// The upgrade the Noodles controller makes: GET /ws, no subprotocol, from its origin.
   func testTheNoodlesUpgradeIsAcceptedWithTheRFC6455AcceptValue() {
-    let verdict = appVerdict(on: head(webSocketUpgrade()), allowedWebSocketOrigins: AppNoodlesWebSocketOrigins)
-    XCTAssertEqual(verdict.requestValid, 200)
-    XCTAssertEqual(verdict.transport, .webSocket(key: "dGhlIHNhbXBsZSBub25jZQ=="))
-    let response = String(decoding: verdict.response, as: UTF8.self)
+    let outcome = appRequestOutcome(on: head(webSocketUpgrade()), allowedWebSocketOrigins: AppNoodlesWebSocketOrigins)
+    XCTAssertEqual(outcome.requestValid, 200)
+    XCTAssertEqual(outcome.transport, .webSocket(key: "dGhlIHNhbXBsZSBub25jZQ=="))
+    let response = String(decoding: outcome.response, as: UTF8.self)
     XCTAssertTrue(response.hasPrefix("HTTP/1.1 101 Switching Protocols\r\n"))
     XCTAssertTrue(response.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"))
     XCTAssertFalse(response.contains("Sec-WebSocket-Protocol"))
@@ -180,11 +180,11 @@ final class AppHTTPTests: XCTestCase {
 
   func testWebSocketOriginsAreChecked() {
     let allowed = AppNoodlesWebSocketOrigins
-    XCTAssertEqual(appVerdict(on: head(webSocketUpgrade(origin: "https://evil.example")), allowedWebSocketOrigins: allowed).requestValid, 403)
-    XCTAssertEqual(appVerdict(on: head(webSocketUpgrade(origin: "http://brohavn:17221")), allowedWebSocketOrigins: []).requestValid, 200)
-    XCTAssertEqual(appVerdict(on: head(webSocketUpgrade(origin: nil)), allowedWebSocketOrigins: []).requestValid, 200)
-    XCTAssertEqual(appVerdict(on: head(webSocketUpgrade(origin: "https://app.noodlescontroller.com")), allowedWebSocketOrigins: allowed).requestValid, 200)
-    XCTAssertEqual(appVerdict(on: head(webSocketUpgrade(path: "/ws?x=1")), allowedWebSocketOrigins: allowed).requestValid, 200)
+    XCTAssertEqual(appRequestOutcome(on: head(webSocketUpgrade(origin: "https://evil.example")), allowedWebSocketOrigins: allowed).requestValid, 403)
+    XCTAssertEqual(appRequestOutcome(on: head(webSocketUpgrade(origin: "http://brohavn:17221")), allowedWebSocketOrigins: []).requestValid, 200)
+    XCTAssertEqual(appRequestOutcome(on: head(webSocketUpgrade(origin: nil)), allowedWebSocketOrigins: []).requestValid, 200)
+    XCTAssertEqual(appRequestOutcome(on: head(webSocketUpgrade(origin: "https://app.noodlescontroller.com")), allowedWebSocketOrigins: allowed).requestValid, 200)
+    XCTAssertEqual(appRequestOutcome(on: head(webSocketUpgrade(path: "/ws?x=1")), allowedWebSocketOrigins: allowed).requestValid, 200)
   }
 
   func testSHA1AndBase64MatchTheirTestVectors() {

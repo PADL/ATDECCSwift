@@ -178,15 +178,15 @@ public final class AtdeccProxyServer<Port: NetworkPort>: Sendable {
 
   private func serveRequest(_ socket: Socket) async throws {
     let (head, leftover) = try await readRequestHead(socket)
-    var verdict = head.map { appVerdict(on: $0, allowedWebSocketOrigins: configuration.allowedWebSocketOrigins) }
+    var outcome = head.map { appRequestOutcome(on: $0, allowedWebSocketOrigins: configuration.allowedWebSocketOrigins) }
       ?? .refused(400)
     // only accepted connections count towards the limit
     var isCounted = false
-    if verdict.transport != nil {
+    if outcome.transport != nil {
       isCounted = connectionCount.add(1, ordering: .relaxed).newValue <= configuration.maximumConnections
       if !isCounted {
         connectionCount.subtract(1, ordering: .relaxed)
-        verdict = .refused(503)
+        outcome = .refused(503)
       }
     }
     defer { if isCounted { connectionCount.subtract(1, ordering: .relaxed) } }
@@ -196,19 +196,19 @@ public final class AtdeccProxyServer<Port: NetworkPort>: Sendable {
         port = try makePort()
       } catch {
         logger.warning("ATDECC proxy cannot open its network port: \(error)")
-        verdict = .refused(503)
+        outcome = .refused(503)
       }
     }
-    guard let transport = verdict.transport, let port else {
-      logger.debug("ATDECC proxy refused \(head?.method ?? "a malformed request") \(head?.target ?? ""): \(verdict.requestValid)")
-      let response = verdict.response
+    guard let transport = outcome.transport, let port else {
+      logger.debug("ATDECC proxy refused \(head?.method ?? "a malformed request") \(head?.target ?? ""): \(outcome.requestValid)")
+      let response = outcome.response
       _ = try await socket.write(response, count: response.count, awaitingAllWritten: true, timeout: configuration.writeTimeout)
       return
     }
     let connection = AtdeccProxyConnection(
       socket: socket,
       transport: transport,
-      verdict: verdict,
+      outcome: outcome,
       leftover: leftover,
       port: port,
       entityIDs: entityIDs,
@@ -270,7 +270,7 @@ private final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
 
   private let socket: Socket
   private let transport: AppTransport
-  private let verdict: AppRequestVerdict
+  private let outcome: AppRequestOutcome
   private let leftover: [UInt8]
   private let port: Port
   private let entityIDs: AtdeccProxyEntityIDs
@@ -280,7 +280,7 @@ private final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
   init(
     socket: Socket,
     transport: AppTransport,
-    verdict: AppRequestVerdict,
+    outcome: AppRequestOutcome,
     leftover: [UInt8],
     port: Port,
     entityIDs: AtdeccProxyEntityIDs,
@@ -289,7 +289,7 @@ private final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
   ) {
     self.socket = socket
     self.transport = transport
-    self.verdict = verdict
+    self.outcome = outcome
     self.leftover = leftover
     self.port = port
     self.entityIDs = entityIDs
@@ -356,7 +356,7 @@ private final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
       [entityIDs] _, requested in entityIDs.assign(key, requested: requested)
     }
     var closeCode: UInt16? = 1000
-    guard perform(machine.requestReceived(verdict.requestValid, at: currentTime), key: key, closeCode, outputs) else {
+    guard perform(machine.requestReceived(outcome.requestValid, at: currentTime), key: key, closeCode, outputs) else {
       return
     }
     for event in pending {
@@ -384,7 +384,7 @@ private final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
       closeCode = code
       return machine.close()
     case let .layer2(packet):
-      entityIDs.noteReceived(packet.payload)
+      entityIDs.observe(packet.payload)
       return machine.layer2FrameReceived(packet, at: currentTime)
     case let .link(isUp):
       return machine.linkStatusChanged(isUp, at: currentTime)
@@ -404,14 +404,14 @@ private final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
     for action in actions {
       switch action {
       case .sendHttpResponse:
-        outputs.apc.yield(verdict.response)
+        outputs.apc.yield(outcome.response)
       case let .sendToApc(appdu):
         if case .dropped = outputs.apc.yield(encode(appdu)) {
           logger.notice("ATDECC proxy closing a connection whose APC is not reading")
           return false
         }
       case let .sendToLayer2(packet):
-        entityIDs.noteSent(packet.payload, by: key)
+        entityIDs.observe(packet.payload, sentBy: key)
         if case .dropped = outputs.layer2.yield(packet) {
           logger.trace("ATDECC proxy dropped a frame for the LAN")
         }

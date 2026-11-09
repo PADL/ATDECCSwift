@@ -249,7 +249,7 @@ final class EntityIDTrackingTests: XCTestCase {
   private func advance(to time: UInt64) { clock.now.withLock { $0 = time } }
 
   func testAnIDAdvertisedOnTheLanIsNotAssigned() {
-    entityIDs.noteReceived(makeAdpdu(entityID: lanID.rawValue))
+    entityIDs.observe(makeAdpdu(entityID: lanID.rawValue))
     let connection = entityIDs.makeConnection()
     let id = entityIDs.assign(connection, requested: lanID)
     XCTAssertNotEqual(id, lanID)
@@ -257,7 +257,7 @@ final class EntityIDTrackingTests: XCTestCase {
   }
 
   func testAnAdvertisementExpiresWithItsValidTime() {
-    entityIDs.noteReceived(makeAdpdu(entityID: lanID.rawValue, validTime: 5))
+    entityIDs.observe(makeAdpdu(entityID: lanID.rawValue, validTime: 5))
     let connection = entityIDs.makeConnection()
     advance(to: 9)
     XCTAssertTrue(entityIDs.isInUse(lanID, for: connection))
@@ -267,17 +267,17 @@ final class EntityIDTrackingTests: XCTestCase {
   }
 
   func testADepartingEntityIsForgotten() {
-    entityIDs.noteReceived(makeAdpdu(entityID: lanID.rawValue))
-    entityIDs.noteReceived(makeAdpdu(entityID: lanID.rawValue, messageType: 1))
+    entityIDs.observe(makeAdpdu(entityID: lanID.rawValue))
+    entityIDs.observe(makeAdpdu(entityID: lanID.rawValue, messageType: 1))
     XCTAssertEqual(entityIDs.assign(entityIDs.makeConnection(), requested: lanID), lanID)
   }
 
   func testAnApcsOwnAdvertisementDoesNotCountAgainstIt() {
     let own = entityIDs.makeConnection()
     let other = entityIDs.makeConnection()
-    entityIDs.noteSent(makeAdpdu(entityID: lanID.rawValue), by: own)
+    entityIDs.observe(makeAdpdu(entityID: lanID.rawValue), sentBy: own)
     // heard again through the other connection's port, as the egress tap delivers it
-    entityIDs.noteReceived(makeAdpdu(entityID: lanID.rawValue))
+    entityIDs.observe(makeAdpdu(entityID: lanID.rawValue))
     XCTAssertFalse(entityIDs.isInUse(lanID, for: own))
     XCTAssertTrue(entityIDs.isInUse(lanID, for: other))
     XCTAssertEqual(entityIDs.assign(own, requested: lanID), lanID)
@@ -286,7 +286,7 @@ final class EntityIDTrackingTests: XCTestCase {
   func testAReconnectingApcKeepsItsID() {
     let first = entityIDs.makeConnection()
     XCTAssertEqual(entityIDs.assign(first, requested: lanID), lanID)
-    entityIDs.noteSent(makeAdpdu(entityID: lanID.rawValue), by: first)
+    entityIDs.observe(makeAdpdu(entityID: lanID.rawValue), sentBy: first)
     entityIDs.release(first)
     XCTAssertEqual(entityIDs.assign(entityIDs.makeConnection(), requested: lanID), lanID)
   }
@@ -294,7 +294,7 @@ final class EntityIDTrackingTests: XCTestCase {
   func testAnIDTheApcHoldsDoesNotCountAgainstIt() {
     let connection = entityIDs.makeConnection()
     XCTAssertEqual(entityIDs.assign(connection, requested: lanID), lanID)
-    entityIDs.noteReceived(makeAdpdu(entityID: lanID.rawValue))
+    entityIDs.observe(makeAdpdu(entityID: lanID.rawValue))
     XCTAssertEqual(entityIDs.assign(connection, requested: lanID), lanID)
   }
 
@@ -302,7 +302,7 @@ final class EntityIDTrackingTests: XCTestCase {
     let probe = entityIDs.makeConnection()
     let derived = entityIDs.assign(probe, requested: UniqueIdentifier())!
     entityIDs.release(probe)
-    entityIDs.noteReceived(makeAdpdu(entityID: derived.rawValue))
+    entityIDs.observe(makeAdpdu(entityID: derived.rawValue))
     XCTAssertNotEqual(entityIDs.assign(entityIDs.makeConnection(), requested: UniqueIdentifier()), derived)
   }
 }

@@ -98,8 +98,8 @@ public final class AtdeccProxyEntityIDs: Sendable {
     }
   }
 
-  /// Notes an AVTPDU the APC of `connection` sent to the LAN.
-  public func noteSent(_ avtpdu: [UInt8], by connection: Int) {
+  /// Observes an AVTPDU the APC of `connection` sent to the LAN, tracking its ADP advertisement.
+  public func observe(_ avtpdu: [UInt8], sentBy connection: Int) {
     guard let adpdu = try? Adpdu(bytes: avtpdu) else { return }
     let now = clock()
     state.withLock { state in
@@ -114,9 +114,9 @@ public final class AtdeccProxyEntityIDs: Sendable {
     }
   }
 
-  /// Notes an AVTPDU received from the LAN. An advertisement an APC of this server made, heard
-  /// again through another connection's port, stays that APC's.
-  public func noteReceived(_ avtpdu: [UInt8]) {
+  /// Observes an AVTPDU received from the LAN, tracking its ADP advertisement. An advertisement
+  /// an APC of this server made, heard again through another connection's port, stays that APC's.
+  public func observe(_ avtpdu: [UInt8]) {
     guard let adpdu = try? Adpdu(bytes: avtpdu) else { return }
     let now = clock()
     state.withLock { state in
