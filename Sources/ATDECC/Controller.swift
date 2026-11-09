@@ -168,8 +168,7 @@ private extension Duration {
 ///   (Figure 9-4). ACMP commands are also retried once (Figure 8-2).
 /// - ACMPDUs are sent with the 2013 control_data_length (see `Acmpdu.length`).
 ///
-/// Unlike la_avdecc, ACMP commands are neither queued nor paced, though those issued as the
-/// controller starts wait until the end station has first received, or failed to.
+/// Unlike la_avdecc, ACMP commands are neither queued nor paced.
 public actor Controller<Port: NetworkPort> {
   /// AEM and MVU commands are numbered independently (Milan 1.3 §5.4.3.2), so a transaction is
   /// identified by both.
@@ -264,10 +263,6 @@ public actor Controller<Port: NetworkPort> {
   private var _identifySequenceIDs = [UniqueIdentifier: UInt16]()
   private var _aecpTargets = [UniqueIdentifier: AecpTarget]()
   private var _acmpTransactions = [UInt16: AcmpTransaction]()
-  /// ACMP commands waiting for the end station to first receive, or fail to, as a response
-  /// that arrives before then is lost; nil once it has.
-  private var _acmpCommandsAwaitingReception: [Int: CheckedContinuation<(), any Error>]? = [:]
-  private var _nextAcmpCommandAwaitingReception = 0
   private var _advertising: Advertising?
   // PDUs are sent in turn by one task, so that a slow port holds up transmission, never the
   // receive path, and so that ENTITY_DEPARTING follows any ENTITY_AVAILABLE
@@ -281,7 +276,9 @@ public actor Controller<Port: NetworkPort> {
 
   /// Creates a controller entity with `entityID` on `endStation`, and sends ENTITY_DISCOVER
   /// to find the entities already on the network, as it does whenever the end station begins
-  /// receiving, such as when its link comes up.
+  /// receiving, such as when its link comes up. It returns once responses can be received, so
+  /// that its first commands are answered: on a new end station after a link state report and
+  /// a socket open, a few ms, or at once if the link is down.
   /// A controller of Milan entities only should use `.milan` ACMP timeouts, so that a listener
   /// that does not answer is reported in 400 ms rather than 9 s.
   public init(
@@ -349,9 +346,7 @@ public actor Controller<Port: NetworkPort> {
     if await endStation.isReceiving {
       _discover(entityID: UniqueIdentifier())
     }
-    if await endStation.hasFirstReceptionSettled {
-      _resumeAcmpCommandsAwaitingReception(with: .success(()))
-    }
+    try await endStation.firstReceptionSettled()
     _maintenanceTask = Task { [weak self, timing] in
       while !Task.isCancelled {
         try? await Task.sleep(for: timing.maintenanceInterval)
@@ -388,7 +383,6 @@ public actor Controller<Port: NetworkPort> {
       transaction.promise.resolve(.failure(CommandError.closed))
     }
     _acmpTransactions = [:]
-    _resumeAcmpCommandsAwaitingReception(with: .failure(CommandError.closed))
 
     _deregisterUnsolicitedNotifications()
     if let advertising = _advertising {
@@ -444,7 +438,6 @@ public actor Controller<Port: NetworkPort> {
   }
 
   func _handleTransportError() {
-    _resumeAcmpCommandsAwaitingReception(with: .success(()))
     _yield(.transportError)
   }
 
@@ -496,7 +489,6 @@ public actor Controller<Port: NetworkPort> {
   func _handleReceptionBegan() {
     guard !_isClosed else { return }
     _discover(entityID: UniqueIdentifier())
-    _resumeAcmpCommandsAwaitingReception(with: .success(()))
   }
 
   private func _apply(_ events: [DiscoveryEvent]) {
@@ -552,8 +544,6 @@ public actor Controller<Port: NetworkPort> {
   /// Advertises again, after the random delay, when the link comes up (lastLinkIsUp in IEEE
   /// 1722.1-2021 Figure 6-5).
   func _handleLinkState(isUp: Bool) {
-    // a command fails as it is sent rather than waiting for the link
-    if !isUp { _resumeAcmpCommandsAwaitingReception(with: .success(())) }
     guard isUp != _lastLinkIsUp else { return }
     _lastLinkIsUp = isUp
     guard isUp, !_isClosed, let advertising = _advertising else { return }
@@ -1378,12 +1368,6 @@ public actor Controller<Port: NetworkPort> {
     flags: ConnectionFlags = []
   ) async throws -> StreamConnectionState {
     guard !_isClosed else { throw AcmpStatus.internalError }
-    do {
-      try await _waitForInitialReception()
-    } catch let error as CommandError {
-      throw AcmpStatus(error)
-    }
-    guard !_isClosed else { throw AcmpStatus.internalError }
 
     let sequenceID = _acmpSequenceID
     _acmpSequenceID &+= 1
@@ -1422,37 +1406,6 @@ public actor Controller<Port: NetworkPort> {
       throw AcmpStatus(UInt16(response.status))
     }
     return StreamConnectionState(response)
-  }
-
-  private func _waitForInitialReception() async throws {
-    guard _acmpCommandsAwaitingReception != nil else { return }
-    let id = _nextAcmpCommandAwaitingReception
-    _nextAcmpCommandAwaitingReception += 1
-    try await withTaskCancellationHandler {
-      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(), any Error>) in
-        if Task.isCancelled {
-          continuation.resume(throwing: CancellationError())
-        } else if _acmpCommandsAwaitingReception == nil {
-          continuation.resume()
-        } else {
-          _acmpCommandsAwaitingReception?[id] = continuation
-        }
-      }
-    } onCancel: { [weak self] in
-      Task { await self?._cancelAcmpCommandAwaitingReception(id) }
-    }
-  }
-
-  private func _cancelAcmpCommandAwaitingReception(_ id: Int) {
-    _acmpCommandsAwaitingReception?.removeValue(forKey: id)?.resume(throwing: CancellationError())
-  }
-
-  private func _resumeAcmpCommandsAwaitingReception(with result: Result<(), any Error>) {
-    guard let waiters = _acmpCommandsAwaitingReception else { return }
-    _acmpCommandsAwaitingReception = nil
-    for waiter in waiters.values {
-      waiter.resume(with: result)
-    }
   }
 
   private func _completeAcmpCommand(sequenceID: UInt16, with result: Result<Acmpdu, any Error>) {
