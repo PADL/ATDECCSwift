@@ -63,12 +63,18 @@ private final class TestApc {
   func open(port: UInt16) async throws -> String {
     #if HTTPTunnel
     try await send(testConnectRequest(port: port))
+    return try await readHead()
     #else
+    return try await openWebSocket(port: port)
+    #endif
+  }
+
+  /// Upgrades to WebSocket, whatever the trait; the response head.
+  func openWebSocket(port: UInt16) async throws -> String {
     isWebSocket = true
     var upgrade = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
     upgrade += "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
     try await send(Array(upgrade.utf8))
-    #endif
     return try await readHead()
   }
 
@@ -498,18 +504,7 @@ final class ProxyConnectionTests: XCTestCase {
     connection.onAbort { aborted.continuation.yield() }
     let run = Task { await connection.run() }
     var iterator = aborted.stream.makeAsyncIterator()
-    let flood = Task {
-      while !Task.isCancelled {
-        try await entity.send(IEEE802Packet(
-          destMacAddress: AvdeccMulticastMacAddress,
-          tci: nil,
-          sourceMacAddress: entityMacAddress,
-          etherType: AvtpEtherType,
-          payload: makeAvtpdu()
-        ))
-        await Task.yield()
-      }
-    }
+    let flood = startFlood(from: entity)
     await iterator.next()
     flood.cancel()
     await run.value
@@ -530,6 +525,102 @@ final class ProxyConnectionTests: XCTestCase {
     }
     await run.value
     XCTAssertEqual(outputs, ["close 1000"])
+  }
+}
+
+/// A port on a `VirtualNetwork` that leaves it, and reports so, when the connection that made it
+/// lets it go, as an AF_PACKET socket is closed.
+private final class ReleaseReportingPort: NetworkPort {
+  private let port: VirtualPort
+  private let released: AsyncStream<()>.Continuation
+
+  init(_ port: VirtualPort, released: AsyncStream<()>.Continuation) {
+    self.port = port
+    self.released = released
+  }
+
+  deinit {
+    port.close()
+    released.yield()
+  }
+
+  var macAddress: EUI48 {
+    port.macAddress
+  }
+
+  func send(_ packet: IEEE802Packet) async throws {
+    try await port.send(packet)
+  }
+
+  func receive(_ handler: (IEEE802Packet) async -> ()) async throws {
+    try await port.receive(handler)
+  }
+
+  func monitorLinkState(_ handler: (Bool) async -> ()) async throws {
+    try await port.monitorLinkState(handler)
+  }
+}
+
+final class StalledWebSocketTests: XCTestCase {
+  /// A WebSocket client that stops reading leaves FlyingFox blocked writing to it, holding the
+  /// socket; once its output overflows, its slot and network port are still given back.
+  func testAWebSocketClientThatStopsReadingGivesBackItsSlotAndPort() async throws {
+    let network = VirtualNetwork()
+    let entity = network.makePort(macAddress: entityMacAddress)
+    let (released, releases) = AsyncStream<()>.makeStream()
+    let configuration = AtdeccProxyServerConfiguration(port: 0, maximumConnections: 1)
+    let server = AtdeccProxyServer(
+      configuration: configuration,
+      linkMacAddress: linkMacAddress,
+      logger: Logger(label: "test")
+    ) {
+      ReleaseReportingPort(network.makePort(macAddress: linkMacAddress), released: releases)
+    }
+    let serverTask = Task { try await server.run() }
+    defer { serverTask.cancel() }
+    try await server.waitUntilListening()
+    guard let port = await server.listeningPort() else { throw POSIXError(.EADDRNOTAVAIL) }
+
+    // the smallest receive window, so that the server's writes back up soon
+    let stalled = try await TestApc(port: port, receiveBufferSize: 1)
+    let head = try await stalled.openWebSocket(port: port)
+    XCTAssertTrue(head.hasPrefix("HTTP/1.1 101 Switching Protocols\r\n"), head)
+    // from here on the client reads nothing, and stays connected
+    let flood = startFlood(from: entity)
+    defer { flood.cancel() }
+    let isReleased = await withTaskGroup(of: Bool.self) { group in
+      group.addTask { await released.first { _ in true } != nil }
+      group.addTask {
+        try? await Task.sleep(for: .seconds(30))
+        return false
+      }
+      defer { group.cancelAll() }
+      return await group.next() ?? false
+    }
+    XCTAssertTrue(isReleased, "the stalled connection kept its network port")
+    flood.cancel()
+
+    // the slot is released in the same release of the session as the port
+    let second = try await TestApc(port: port)
+    let accepted = try await second.openWebSocket(port: port)
+    XCTAssertTrue(accepted.hasPrefix("HTTP/1.1 101 Switching Protocols\r\n"), accepted)
+    _ = stalled
+  }
+}
+
+/// The entity sending ADP frames as fast as it can, until cancelled.
+private func startFlood(from entity: VirtualPort) -> Task<(), any Error> {
+  Task {
+    while !Task.isCancelled {
+      try await entity.send(IEEE802Packet(
+        destMacAddress: AvdeccMulticastMacAddress,
+        tci: nil,
+        sourceMacAddress: entityMacAddress,
+        etherType: AvtpEtherType,
+        payload: makeAvtpdu()
+      ))
+      await Task.yield()
+    }
   }
 }
 
