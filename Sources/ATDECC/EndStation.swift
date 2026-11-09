@@ -144,13 +144,16 @@ public actor EndStation<Port: NetworkPort> {
 
   // MARK: - Entities
 
-  func register(_ controller: Controller<Port>) throws {
+  /// Returns whether the port is already receiving; otherwise the controller is told when it
+  /// begins, so that it discovers entities once, either way.
+  func register(_ controller: Controller<Port>) throws -> Bool {
     guard !_isClosed else { throw EndStationError.closed }
     guard _controllers[controller.entityID]?.controller == nil else {
       throw EndStationError.duplicateEntityID(controller.entityID)
     }
     _controllers[controller.entityID] = ControllerReference(controller: controller)
     _startMonitoringLinkState()
+    return isReceiving
   }
 
   func unregister(_ entityID: UniqueIdentifier) {

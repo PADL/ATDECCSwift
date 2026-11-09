@@ -308,7 +308,7 @@ public actor Controller<Port: NetworkPort> {
     )
     let transmissions: AsyncStream<Transmission>
     (transmissions, _transmissions) = AsyncStream.makeStream()
-    try await endStation.register(self)
+    let isReceiving = try await endStation.register(self)
     _transmitTask = Task { [weak self, endStation, entityID, logger = _logger] in
       for await transmission in transmissions {
         switch transmission {
@@ -342,11 +342,11 @@ public actor Controller<Port: NetworkPort> {
         }
       }
     }
+    try await endStation.firstReceptionSettled()
     // otherwise once the end station receives, when the entities' answers can be received
-    if await endStation.isReceiving {
+    if isReceiving {
       _discover(entityID: UniqueIdentifier())
     }
-    try await endStation.firstReceptionSettled()
     _maintenanceTask = Task { [weak self, timing] in
       while !Task.isCancelled {
         try? await Task.sleep(for: timing.maintenanceInterval)
