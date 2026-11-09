@@ -158,7 +158,7 @@ final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
   }
 
   /// Performs `actions`; false once the connection is to close. An APC whose messages back up
-  /// is not reading them, and its connection is ended.
+  /// is not reading them, and its connection is ended, with the transport's abort if it has one.
   private func perform(_ actions: [AtdeccProxyServerStateMachine.Action], key: Int, _ closeCode: UInt16?) async -> Bool {
     for action in actions {
       switch action {

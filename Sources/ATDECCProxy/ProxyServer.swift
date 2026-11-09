@@ -205,7 +205,8 @@ private struct AtdeccProxyRequestHandler<Port: NetworkPort>: HTTPHandler {
       #endif
     case .webSocket:
       // the handshake is FlyingFox's: a malformed one is answered 400
-      let channel = AtdeccProxyWebSocket(connection: connection, slot: slot, logger: logger)
+      let session = AtdeccProxySession(slot: slot, connection: connection)
+      let channel = AtdeccProxyWebSocket(session, logger: logger)
       return try await WebSocketHTTPHandler(handler: channel).handleRequest(request)
     }
   }
@@ -263,28 +264,46 @@ private struct AtdeccProxyTunnel<Port: NetworkPort>: HTTPTunnelHandler {
 // WebSocket - an extension, not part of Annex C
 //
 
+/// An accepted APC's slot and connection, and so its network port.
+private struct AtdeccProxySession<Port: NetworkPort> {
+  let slot: AtdeccProxySlot
+  let connection: AtdeccProxyConnection<Port>
+}
+
 /// An APC's connection after a WebSocket upgrade: one APPDU per binary message. Messages are
 /// read as one stream, as the Noodles/Sienda proxy reads them, so an APPDU split across
 /// messages, or several in one, are accepted too.
-private struct AtdeccProxyWebSocket<Port: NetworkPort>: WSHandler {
-  let connection: AtdeccProxyConnection<Port>
-  let slot: AtdeccProxySlot
-  let logger: Logger
+private final class AtdeccProxyWebSocket<Port: NetworkPort>: WSHandler {
+  /// Until `makeFrames` hands it to the task that runs it: FlyingFox keeps this handler while
+  /// it holds the socket, which a client that stops reading holds indefinitely.
+  private let session: Mutex<AtdeccProxySession<Port>?>
+  private let logger: Logger
+
+  init(_ session: AtdeccProxySession<Port>, logger: Logger) {
+    self.session = Mutex(session)
+    self.logger = logger
+  }
 
   func makeFrames(for client: AsyncThrowingStream<WSFrame, any Error>) async throws -> AsyncStream<WSFrame> {
-    let task = Task { [connection, slot, logger] in
+    let session = session.withLock { session in
+      defer { session = nil }
+      return session
+    }
+    // FlyingFox makes the frames once
+    guard let session else { return AsyncStream { $0.finish() } }
+    // pulled by FlyingFox one frame at a time, so a client that stops reading backs up
+    // `connection.output`, which is bounded; the iterator does not hold the connection
+    let output = AtdeccProxyOutputIterator(session.connection.output)
+    // the session's owner: the slot and the network port go when it ends, even while
+    // FlyingFox is still blocked writing to the socket
+    let task = Task { [logger] in
       await withTaskGroup { group in
-        group.addTask { await Self.read(client, into: connection, logger: logger) }
-        await connection.run()
-        // CLOSED, whoever ended it: a read still waiting on the socket FlyingFox is closing
-        // would never end, holding the slot and the network port
+        group.addTask { await Self.read(client, into: session.connection, logger: logger) }
+        await session.connection.run()
+        // CLOSED, whoever ended it: a read still waiting on the socket would never end
         group.cancelAll()
       }
-      _ = slot
     }
-    // pulled by FlyingFox one frame at a time, so a client that stops reading backs up
-    // `connection.output`, which is bounded
-    let output = AtdeccProxyOutputIterator(connection.output)
     return AsyncStream(unfolding: { await output.nextFrame() }, onCancel: { task.cancel() })
   }
 
