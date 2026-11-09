@@ -80,13 +80,19 @@ private let _drainTimeout = Duration.seconds(2)
 public final class AtdeccProxyServer<Port: NetworkPort>: Sendable {
   public let configuration: AtdeccProxyServerConfiguration
   public let entityIDs: AtdeccProxyEntityIDs
-  /// Each listener's server, and for the IPv6 wildcard, the IPv4 one to use if IPv6 is off.
-  private let servers: [(server: HTTPServer, ipv4Fallback: HTTPServer?)]
+  private let handler: AtdeccProxyRequestHandler<Port>
+  private struct Listeners {
+    /// By the address literal each listens at.
+    var byAddress = [String: AtdeccProxyListener]()
+    var isRunning = false
+  }
+
+  private let listeners = Mutex(Listeners())
   private let logger: Logger
 
-  /// Listens on `configuration.port` at each of `configuration.addresses` once run.
-  /// `linkMacAddress` is the MAC address of the ports `makePort` makes (linkMac, Clause
-  /// C.5.2.1.15). Throws if an address is not an IP literal.
+  /// Listens on `configuration.port` at each of `configuration.addresses` once run, or at
+  /// those `setAddresses(_:)` gives, before or after. `linkMacAddress` is the MAC address of the ports
+  /// `makePort` makes (linkMac, Clause C.5.2.1.15). Throws if an address is not an IP literal.
   public init(
     configuration: AtdeccProxyServerConfiguration = .init(),
     linkMacAddress: EUI48,
@@ -94,80 +100,182 @@ public final class AtdeccProxyServer<Port: NetworkPort>: Sendable {
     entityIDs: AtdeccProxyEntityIDs? = nil,
     makePort: @escaping @Sendable () throws -> Port
   ) throws {
+    _ = try Self.socketAddresses(configuration.addresses, port: configuration.port)
     self.configuration = configuration
     self.logger = logger
     let entityIDs = entityIDs ?? AtdeccProxyEntityIDs(linkMacAddress: linkMacAddress)
     self.entityIDs = entityIDs
-    let handler = AtdeccProxyRequestHandler(
+    handler = AtdeccProxyRequestHandler(
       configuration: configuration,
       entityIDs: entityIDs,
       slots: AtdeccProxySlots(capacity: configuration.maximumConnections),
       makePort: makePort,
       logger: logger
     )
-    let makeServer = { (address: any SocketAddress) in
-      HTTPServer(config: Self.serverConfiguration(address, logger: logger), handler: handler)
-    }
-    servers = try Self.addresses(configuration).map { address in
-      let isWildcard = address is sockaddr_in6 && configuration.addresses.contains("::")
-      let fallback = isWildcard ? makeServer(sockaddr_in.inet(port: configuration.port)) : nil
-      return (makeServer(address), fallback)
-    }
+    try setAddresses(configuration.addresses)
   }
 
-  private static func serverConfiguration(_ address: some SocketAddress, logger: Logger) -> HTTPServer.Configuration {
+  /// One socket address per listening address literal; with a wildcard, that alone, since an
+  /// IPv6 wildcard listener also accepts IPv4.
+  private static func socketAddresses(_ literals: [String], port: UInt16) throws -> [String: any SocketAddress] {
+    let literals = literals.contains("::") ? ["::"] : literals
+    var addresses = [String: any SocketAddress]()
+    for literal in literals {
+      addresses[literal] = literal.contains(":")
+        ? try sockaddr_in6.inet6(ip6: literal, port: port)
+        : try sockaddr_in.inet(ip4: literal, port: port)
+    }
+    return addresses
+  }
+
+  private func makeServer(_ address: some SocketAddress) -> HTTPServer {
     #if HTTPTunnel
     // FlyingFox's main branch, which the trait needs, bounds incoming WebSocket frames
-    HTTPServer.Configuration(
+    let configuration = HTTPServer.Configuration(
       address: address,
       webSocketMaxFrameSize: AppWebSocketMaximumMessageLength,
       logger: AtdeccProxyHTTPLogging(logger: logger)
     )
     #else
-    HTTPServer.Configuration(address: address, logger: AtdeccProxyHTTPLogging(logger: logger))
+    let configuration = HTTPServer.Configuration(address: address, logger: AtdeccProxyHTTPLogging(logger: logger))
     #endif
+    return HTTPServer(config: configuration, handler: handler)
   }
 
-  /// One socket address per listening address; with a wildcard, that alone, since an IPv6
-  /// wildcard listener also accepts IPv4.
-  private static func addresses(_ configuration: AtdeccProxyServerConfiguration) throws -> [any SocketAddress] {
-    let literals = configuration.addresses.contains("::") ? ["::"] : configuration.addresses
-    return try literals.map { literal -> any SocketAddress in
-      literal.contains(":")
-        ? try sockaddr_in6.inet6(ip6: literal, port: configuration.port)
-        : try sockaddr_in.inet(ip4: literal, port: configuration.port)
+  /// Serves APCs until the task is cancelled, then closes every connection (FINISH), at the
+  /// configured addresses unless `setAddresses(_:)` has given others.
+  ///
+  /// A listener that fails, because accepting failed for want of descriptors say, or its
+  /// address is not yet configured, is logged (again when its error changes) and started
+  /// again; one on the IPv6 wildcard that cannot bind for want of IPv6 listens on the IPv4
+  /// wildcard instead. FlyingFox ends a listener, and the connections it serves, when an accept
+  /// fails.
+  public func run() async throws {
+    let toStart = listeners.withLock { listeners in
+      listeners.isRunning = true
+      return Array(listeners.byAddress.values)
+    }
+    logger.info("ATDECC proxy listening on TCP port \(configuration.port) at \(currentAddresses.joined(separator: ", "))")
+    for listener in toStart {
+      listener.start(logger: logger)
+    }
+    let (cancellation, continuation) = AsyncStream<Never>.makeStream()
+    await withTaskCancellationHandler {
+      for await _ in cancellation {}
+    } onCancel: {
+      continuation.finish()
+    }
+    let stopped = listeners.withLock { listeners in
+      listeners.isRunning = false
+      return Array(listeners.byAddress.values)
+    }
+    for listener in stopped {
+      await listener.stop()
     }
   }
 
-  /// Serves APCs until the task is cancelled, then closes every connection (FINISH). A listener
-  /// that fails, because accepting failed for want of descriptors say, or its address is not
-  /// yet configured, is logged (again when its error changes) and started again; one on the
-  /// IPv6 wildcard that cannot bind for want of IPv6 listens on the IPv4 wildcard instead.
-  /// FlyingFox ends a listener, and the connections it serves, when an accept fails.
-  public func run() async throws {
-    logger.info("ATDECC proxy listening on TCP port \(configuration.port) at \(configuration.addresses.joined(separator: ", "))")
-    await withDiscardingTaskGroup { group in
-      for (server, ipv4Fallback) in servers {
-        group.addTask { [logger] in
-          await Self.serve(server, ipv4Fallback: ipv4Fallback, logger: logger)
-        }
+  /// Listens at `addresses` (IP literals, "::" for every address) from now on: a listener is
+  /// started at each new one, and one at an address no longer given stops, closing its
+  /// connections. Throws, changing nothing, if an address is not an IP literal.
+  public func setAddresses(_ addresses: [String]) throws {
+    let socketAddresses = try Self.socketAddresses(addresses, port: configuration.port)
+    let (added, removed, isRunning) = listeners.withLock { listeners in
+      let removed = listeners.byAddress.filter { socketAddresses[$0.key] == nil }
+      for literal in removed.keys {
+        listeners.byAddress.removeValue(forKey: literal)
+      }
+      var added = [AtdeccProxyListener]()
+      for (literal, address) in socketAddresses where listeners.byAddress[literal] == nil {
+        let fallback = literal == "::" ? makeServer(sockaddr_in.inet(port: configuration.port)) : nil
+        let listener = AtdeccProxyListener(server: makeServer(address), ipv4Fallback: fallback)
+        listeners.byAddress[literal] = listener
+        added.append(listener)
+      }
+      return (added, Array(removed.values), listeners.isRunning)
+    }
+    for listener in removed {
+      Task { await listener.stop() }
+    }
+    // those added before the server runs start with it
+    guard isRunning else { return }
+    for listener in added {
+      listener.start(logger: logger)
+    }
+    if !added.isEmpty || !removed.isEmpty {
+      logger.info("ATDECC proxy listening on TCP port \(configuration.port) at \(currentAddresses.joined(separator: ", "))")
+    }
+  }
+
+  private var currentAddresses: [String] {
+    listeners.withLock { $0.byAddress.keys.sorted() }
+  }
+
+  /// Waits until every address is listening.
+  public func waitUntilListening(timeout: TimeInterval = 5) async throws {
+    for listener in listeners.withLock({ Array($0.byAddress.values) }) {
+      try await listener.server.waitUntilListening(timeout: timeout)
+    }
+  }
+
+  /// The port each address listens on, once listening.
+  public func listeningPorts() async -> [UInt16] {
+    var ports = [UInt16]()
+    for listener in listeners.withLock({ Array($0.byAddress.values) }) {
+      switch await listener.server.listeningAddress {
+      case let .ip4(_, port), let .ip6(_, port): ports.append(port)
+      default: break
       }
     }
+    return ports
+  }
+}
+
+/// One listening address's FlyingFox server, run until it is stopped.
+private final class AtdeccProxyListener: Sendable {
+  private struct State {
+    var server: HTTPServer
+    var ipv4Fallback: HTTPServer?
+    var task: Task<(), Never>?
   }
 
-  private static func serve(_ server: HTTPServer, ipv4Fallback: HTTPServer?, logger: Logger) async {
-    var server = server
-    var ipv4Fallback = ipv4Fallback
+  private let state: Mutex<State>
+
+  init(server: HTTPServer, ipv4Fallback: HTTPServer?) {
+    state = Mutex(State(server: server, ipv4Fallback: ipv4Fallback))
+  }
+
+  /// The server in use: the IPv4 wildcard's once IPv6 is found unavailable.
+  var server: HTTPServer {
+    state.withLock { $0.server }
+  }
+
+  func start(logger: Logger) {
+    let task = Task { [self] in await serve(logger: logger) }
+    state.withLock { $0.task = task }
+  }
+
+  /// Stops listening and closes the listener's connections.
+  func stop() async {
+    let task = state.withLock { $0.task }
+    task?.cancel()
+    await task?.value
+  }
+
+  private func serve(logger: Logger) async {
     var lastError: String?
     while !Task.isCancelled {
       do {
         try await server.run()
       } catch {
         guard !Task.isCancelled else { return }
-        if let fallback = ipv4Fallback, Self.isIPv6Unavailable(error) {
+        let fallback = state.withLock { state -> HTTPServer? in
+          guard let fallback = state.ipv4Fallback, Self.isIPv6Unavailable(error) else { return nil }
+          state.server = fallback
+          state.ipv4Fallback = nil
+          return fallback
+        }
+        if fallback != nil {
           logger.notice("ATDECC proxy listening on the IPv4 wildcard: IPv6 is unavailable (\(error))")
-          server = fallback
-          ipv4Fallback = nil
           continue
         }
         let description = "\(error)"
@@ -183,25 +291,6 @@ public final class AtdeccProxyServer<Port: NetworkPort>: Sendable {
   private static func isIPv6Unavailable(_ error: any Error) -> Bool {
     guard case let .failed(_, errno, _) = error as? SocketError else { return false }
     return errno == EAFNOSUPPORT || errno == EADDRNOTAVAIL || errno == EPROTONOSUPPORT
-  }
-
-  /// Waits until every address is listening.
-  public func waitUntilListening(timeout: TimeInterval = 5) async throws {
-    for (server, _) in servers {
-      try await server.waitUntilListening(timeout: timeout)
-    }
-  }
-
-  /// The port each address listens on, once listening.
-  public func listeningPorts() async -> [UInt16] {
-    var ports = [UInt16]()
-    for (server, _) in servers {
-      switch await server.listeningAddress {
-      case let .ip4(_, port), let .ip6(_, port): ports.append(port)
-      default: break
-      }
-    }
-    return ports
   }
 }
 

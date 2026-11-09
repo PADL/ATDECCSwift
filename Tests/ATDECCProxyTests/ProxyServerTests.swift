@@ -38,12 +38,12 @@ private final class TestApc {
   private var decoded = [Appdu]()
   private var messages = [TestWebSocketMessage]()
 
-  init(port: UInt16, receiveBufferSize: CInt? = nil) async throws {
+  init(port: UInt16, host: String = "127.0.0.1", receiveBufferSize: CInt? = nil) async throws {
     socket = try Socket(ring: .shared, domain: sa_family_t(AF_INET), type: SOCK_STREAM, protocol: 0)
     if let receiveBufferSize {
       try socket.setIntegerOption(option: SO_RCVBUF, to: receiveBufferSize)
     }
-    try await socket.connect(to: sockaddr_in(family: sa_family_t(AF_INET), presentationAddress: "127.0.0.1:\(port)"))
+    try await socket.connect(to: sockaddr_in(family: sa_family_t(AF_INET), presentationAddress: "\(host):\(port)"))
   }
 
   func send(_ bytes: [UInt8]) async throws {
@@ -463,6 +463,30 @@ final class ProxyServerTests: XCTestCase {
     XCTAssertLessThan(ContinuousClock.now - start, .seconds(4))
   }
   #endif
+
+  /// The listeners follow the addresses given, as a device's do when its own change.
+  func testListenersFollowTheAddressesGiven() async throws {
+    let apc = try await TestApc(port: port)
+    let head = try await apc.open(port: port)
+    XCTAssertTrue(Self.isAccepted(head), head)
+
+    try server.setAddresses(["127.0.0.2"])
+    try await server.waitUntilListening()
+    guard let newPort = await server.listeningPorts().first else { return XCTFail("not listening") }
+    let moved = try await TestApc(port: newPort, host: "127.0.0.2")
+    let movedHead = try await moved.open(port: newPort)
+    XCTAssertTrue(Self.isAccepted(movedHead), movedHead)
+    // the listener at the address no longer given has gone, with its connection
+    _ = try? await apc.readToEnd()
+    do {
+      _ = try await TestApc(port: port)
+      XCTFail("still listening at 127.0.0.1")
+    } catch {}
+    do {
+      try server.setAddresses(["not an address"])
+      XCTFail("an address that is not an IP literal is refused")
+    } catch {}
+  }
 
   func testTheLinkGoingDownIsReported() async throws {
     let apc = try await TestApc(port: port)
