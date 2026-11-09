@@ -345,7 +345,7 @@ public actor Controller<Port: NetworkPort> {
         }
       }
     }
-    // otherwise once the end station receives, when the entities' answers can be heard
+    // otherwise once the end station receives, when the entities' answers can be received
     if await endStation.isReceiving {
       _discover(entityID: UniqueIdentifier())
     }

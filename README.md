@@ -187,7 +187,7 @@ AVDECC multicast address.
 `UnixSocketPort(path:)` binds its socket to an autobound abstract address and connects it to
 the entity's path. The entity binds the path, receives with `recvfrom`, and replies to each
 controller with `sendto` to the address its datagrams came from, sending its advertisements
-and other multicast frames to every controller it has heard from and forgetting one when a
+and other multicast frames to every controller it has received from and forgetting one when a
 send to it fails with `EPERM`, `ECONNREFUSED` or `ENOENT`. A datagram socket has no end of
 stream, so an entity that goes away is noticed when a send fails; the port then connects to
 the path again on each send, reaching the entity once it is back, and the entity goes offline
@@ -214,7 +214,7 @@ whole command including discovery of its entity). Output is text, or JSON with `
 
 | Command | Does |
 |---|---|
-| `discover [--seconds N]` | lists the entities heard in N seconds (default 3): entity and model IDs, name, capabilities, stream counts, gPTP grandmaster |
+| `discover [--seconds N]` | lists the entities received in N seconds (default 3): entity and model IDs, name, capabilities, stream counts, gPTP grandmaster |
 | `dump <entity>` | reads the current configuration's ENTITY, CONFIGURATION, AUDIO_UNIT, STREAM_INPUT, STREAM_OUTPUT, AVB_INTERFACE, CLOCK_SOURCE and CLOCK_DOMAIN descriptors, with each stream's current and supported formats decoded |
 | `stream-info <entity> input\|output <index>` | GET_STREAM_INFO |
 | `set-format <entity> input\|output <index> <format> [--acquire] [--lock]` | SET_STREAM_FORMAT, acquiring or locking the entity around it if asked |

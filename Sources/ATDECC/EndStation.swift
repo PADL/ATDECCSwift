@@ -78,7 +78,7 @@ public actor EndStation<Port: NetworkPort> {
   private var _receiveTask: Task<(), Never>?
   private var _linkStateTask: Task<(), Never>?
   private var _isClosed = false
-  /// Whether the port is receiving, so that answers to an ENTITY_DISCOVER would be heard.
+  /// Whether the port is receiving, so that answers to an ENTITY_DISCOVER would be received.
   private(set) var isReceiving = false
   /// Whether the port has first received, failed to, or been found to have its link down.
   private(set) var hasFirstReceptionSettled = false
@@ -194,7 +194,7 @@ public actor EndStation<Port: NetworkPort> {
   /// Receives on the port while its link is up, receiving again whenever reception ends: a port
   /// can stop receiving (an AF_PACKET socket fails with ENETDOWN when its interface goes down, a
   /// serial device with EIO when it hangs up), and the entities on the end station would
-  /// otherwise hear nothing more. A port that keeps failing, such as a serial device that has
+  /// otherwise receive nothing more. A port that keeps failing, such as a serial device that has
   /// gone, is tried again ever less often, and reported to the entities once.
   private func _startReceiving() {
     guard !_isClosed, _receiveTask == nil else { return }

@@ -389,7 +389,7 @@ private let talkerStream = StreamIdentification(
 )
 private let listenerStream = StreamIdentification(entityID: entityID, streamIndex: 0)
 
-/// A port that, like an AF_PACKET socket opened once its link is reported up, hears nothing
+/// A port that, like an AF_PACKET socket opened once its link is reported up, receives nothing
 /// sent before its reception begins, `receptionDelay` after it is asked to.
 private struct LateReceivingPort: NetworkPort {
   let network: VirtualNetwork
@@ -1118,7 +1118,7 @@ final class ControllerTests: XCTestCase {
   }
 
   /// A controller's first command is sent once its end station receives, so that its response
-  /// is heard rather than lost, and the command retried after its timeout.
+  /// is received rather than lost, and the command retried after its timeout.
   func testFirstAcmpCommandIsAnswered() async throws {
     let port = LateReceivingPort(network: network, receptionDelay: .milliseconds(50))
     let endStation = EndStation(port: port, logger: Logger(label: "ControllerTests"))

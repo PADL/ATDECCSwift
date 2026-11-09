@@ -349,7 +349,7 @@ An ATDECC (IEEE 1722.1-2021, Milan) controller for the command line. An Ethernet
 needs CAP_NET_RAW; a Unix domain socket reaches only the entity on this host.
 
 Commands:
-  discover [--seconds N]                       list the entities heard in N seconds (default 3)
+  discover [--seconds N]                       list the entities received in N seconds (default 3)
   dump <entity>                                the current configuration's descriptors
   stream-info <entity> input|output <index>    GET_STREAM_INFO
   set-format <entity> input|output <index> <format> [--acquire] [--lock]

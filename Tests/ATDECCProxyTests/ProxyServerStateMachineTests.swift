@@ -276,7 +276,7 @@ final class EntityIDTrackingTests: XCTestCase {
     let own = entityIDs.makeConnection()
     let other = entityIDs.makeConnection()
     entityIDs.observe(makeAdpdu(entityID: lanID.rawValue), sentBy: own)
-    // heard again through the other connection's port, as the egress tap delivers it
+    // received again through the other connection's port, as the egress tap delivers it
     entityIDs.observe(makeAdpdu(entityID: lanID.rawValue))
     XCTAssertFalse(entityIDs.isInUse(lanID, for: own))
     XCTAssertTrue(entityIDs.isInUse(lanID, for: other))
