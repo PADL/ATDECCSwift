@@ -35,9 +35,7 @@ private final class TestApc {
   private var buffer = [UInt8]()
   private var appdus = AppduStreamDecoder()
   private var decoded = [Appdu]()
-  private var frames = WebSocketFrameDecoder(requiresMask: false)
-  private var messages = [WebSocketMessage]()
-  private let mask: [UInt8] = [0x12, 0x34, 0x56, 0x78]
+  private var messages = [TestWebSocketMessage]()
 
   init(port: UInt16, receiveBufferSize: CInt? = nil) async throws {
     socket = try Socket(ring: .shared, domain: sa_family_t(AF_INET), type: SOCK_STREAM, protocol: 0)
@@ -52,7 +50,7 @@ private final class TestApc {
   }
 
   func sendMessage(_ appdu: Appdu) async throws {
-    try await send(webSocketFrame(.binary, appdu.serialized(), maskingKey: mask))
+    try await send(testWebSocketFrame(opcode: 0x2, appdu.serialized()))
   }
 
   private func fill() async throws {
@@ -63,10 +61,10 @@ private final class TestApc {
 
   /// The response head, as text.
   func readHead() async throws -> String {
-    while AppHTTPRequestHead.endOfHead(in: buffer) == nil {
+    while testEndOfHead(in: buffer) == nil {
       try await fill()
     }
-    let end = AppHTTPRequestHead.endOfHead(in: buffer)!
+    let end = testEndOfHead(in: buffer)!
     defer { buffer.removeFirst(end) }
     return String(decoding: buffer[..<end], as: UTF8.self)
   }
@@ -84,10 +82,9 @@ private final class TestApc {
   }
 
   /// The next WebSocket message; each binary one must be exactly one APPDU.
-  func readMessage() async throws -> WebSocketMessage {
+  func readMessage() async throws -> TestWebSocketMessage {
     while messages.isEmpty {
-      messages = try frames.decode(buffer)
-      buffer = []
+      messages = testWebSocketMessages(&buffer)
       if messages.isEmpty { try await fill() }
     }
     return messages.removeFirst()
@@ -98,15 +95,10 @@ private final class TestApc {
     return try Appdu(bytes: payload)
   }
 
-  /// The WebSocket close status of the next message, which must be a close frame.
+  /// The WebSocket close status the server sends, skipping messages before it.
   func readCloseCode() async throws -> UInt16? {
     while true {
-      let bytes = try await socket.receive(count: 4096, timeout: timeout)
-      guard !bytes.isEmpty else { return nil }
-      buffer += bytes
-      guard buffer.count >= 4 else { continue }
-      XCTAssertEqual(buffer[0], 0x88)
-      return UInt16(buffer[2]) << 8 | UInt16(buffer[3])
+      if case let .close(code) = try await readMessage() { return code }
     }
   }
 
@@ -126,13 +118,15 @@ final class ProxyServerTests: XCTestCase {
   private var entityPort: VirtualPort!
   private var server: AtdeccProxyServer<VirtualPort>!
   private var serverTask: Task<(), any Error>!
+  /// The TCP port the server listens on, at 127.0.0.1.
+  private var port: UInt16 = 0
   /// The ports the server's factory made, one per connection.
   private let connectionPorts = PortList()
 
   override func setUp() async throws {
     network = VirtualNetwork()
     entityPort = network.makePort(macAddress: entityMacAddress)
-    try startServer(maximumConnections: 8)
+    try await startServer(maximumConnections: 8)
   }
 
   override func tearDown() async throws {
@@ -140,15 +134,11 @@ final class ProxyServerTests: XCTestCase {
     _ = await serverTask.result
   }
 
-  private func startServer(
-    maximumConnections: Int,
-    requestTimeout: Duration = .seconds(10),
-    writeTimeout: Duration = .seconds(10)
-  ) throws {
+  private func startServer(maximumConnections: Int, writeTimeout: Duration = .seconds(10)) async throws {
     let configuration = AtdeccProxyServerConfiguration(
       port: 0,
+      addresses: ["127.0.0.1"],
       maximumConnections: maximumConnections,
-      requestTimeout: requestTimeout,
       writeTimeout: writeTimeout
     )
     let network = network!
@@ -159,6 +149,8 @@ final class ProxyServerTests: XCTestCase {
       return port
     }
     serverTask = Task { [server] in try await server!.run() }
+    try await server.waitUntilListening()
+    port = await server.listeningPorts()[0]
   }
 
   /// A frame the entity sends, as on the LAN.
@@ -191,8 +183,8 @@ final class ProxyServerTests: XCTestCase {
   }
 
   func testAConnectApcIsServedAsInAnnexC() async throws {
-    let apc = try await TestApc(port: server.port)
-    try await apc.send(appConnectRequest(host: "127.0.0.1", port: server.port).serialized())
+    let apc = try await TestApc(port: port)
+    try await apc.send(testConnectRequest(port: port))
     let head = try await apc.readHead()
     XCTAssertEqual(head, "HTTP/1.1 200 OK\r\n\r\n")
 
@@ -221,9 +213,9 @@ final class ProxyServerTests: XCTestCase {
   }
 
   func testAppdusSentWithTheRequestAreNotLost() async throws {
-    let apc = try await TestApc(port: server.port)
+    let apc = try await TestApc(port: port)
     let request = Appdu.entityIDRequest(apcMacAddress: apcMacAddress, entityID: UniqueIdentifier(0x42))
-    try await apc.send(appConnectRequest(host: "127.0.0.1", port: server.port).serialized() + request.serialized())
+    try await apc.send(testConnectRequest(port: port) + request.serialized())
     _ = try await apc.readHead()
     let awaited1 = try await apc.readAppdu().messageType
     XCTAssertEqual(awaited1, .linkUp)
@@ -232,8 +224,8 @@ final class ProxyServerTests: XCTestCase {
   }
 
   func testAnApcPduOutsideTableC7ClosesTheConnection() async throws {
-    let apc = try await TestApc(port: server.port)
-    try await apc.send(appConnectRequest(host: "127.0.0.1", port: server.port).serialized())
+    let apc = try await TestApc(port: port)
+    try await apc.send(testConnectRequest(port: port))
     _ = try await apc.readHead()
     _ = try await apc.readAppdu()
     try await apc.send(Appdu.atdeccFromApc(destinationMacAddress: entityMacAddress, avtpdu: makeAvtpdu(subtype: 0x02)).serialized())
@@ -244,8 +236,8 @@ final class ProxyServerTests: XCTestCase {
   /// The exchange of the Noodles controller: GET /ws from its origin, no subprotocol, one APPDU
   /// per binary message, ENTITY_ID_REQUEST first.
   func testTheNoodlesWebSocketExchangeWorks() async throws {
-    let apc = try await TestApc(port: server.port)
-    var upgrade = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:\(server.port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+    let apc = try await TestApc(port: port)
+    var upgrade = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
     upgrade += "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
     upgrade += "Origin: https://noodlescontroller.com\r\n\r\n"
     try await apc.send(Array(upgrade.utf8))
@@ -269,20 +261,20 @@ final class ProxyServerTests: XCTestCase {
     let awaited4 = try await entityReceives().payload
     XCTAssertEqual(awaited4, command)
 
-    try await apc.send(webSocketFrame(.ping, [5], maskingKey: [1, 2, 3, 4]))
+    try await apc.send(testWebSocketFrame(opcode: 0x9, [5]))
     let awaited5 = try await apc.readMessage()
     XCTAssertEqual(awaited5, .pong([5]))
-    try await apc.send(webSocketFrame(.close, [0x03, 0xE8], maskingKey: [1, 2, 3, 4]))
+    try await apc.send(testWebSocketFrame(opcode: 0x8, [0x03, 0xE8]))
     let awaited6 = try await apc.readMessage()
-    XCTAssertEqual(awaited6, .close)
+    XCTAssertEqual(awaited6, .close(1000))
     // one close frame in answer, then the end of the connection
     let rest = try await apc.readToEnd()
     XCTAssertEqual(rest, [])
   }
 
   func testAWebSocketFromAForeignOriginIsRefused() async throws {
-    let apc = try await TestApc(port: server.port)
-    var upgrade = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:\(server.port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+    let apc = try await TestApc(port: port)
+    var upgrade = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
     upgrade += "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nOrigin: https://evil.example\r\n\r\n"
     try await apc.send(Array(upgrade.utf8))
     let awaited7 = try await apc.readHead().hasPrefix("HTTP/1.1 403 Forbidden\r\n")
@@ -292,13 +284,13 @@ final class ProxyServerTests: XCTestCase {
   func testApcsBeyondTheLimitAreRefused() async throws {
     serverTask.cancel()
     _ = await serverTask.result
-    try startServer(maximumConnections: 1)
-    let first = try await TestApc(port: server.port)
-    try await first.send(appConnectRequest(host: "127.0.0.1", port: server.port).serialized())
+    try await startServer(maximumConnections: 1)
+    let first = try await TestApc(port: port)
+    try await first.send(testConnectRequest(port: port))
     let awaited8 = try await first.readHead()
     XCTAssertEqual(awaited8, "HTTP/1.1 200 OK\r\n\r\n")
-    let second = try await TestApc(port: server.port)
-    try await second.send(appConnectRequest(host: "127.0.0.1", port: server.port).serialized())
+    let second = try await TestApc(port: port)
+    try await second.send(testConnectRequest(port: port))
     let awaited9 = try await second.readHead().hasPrefix("HTTP/1.1 503 Service Unavailable\r\n")
     XCTAssertTrue(awaited9)
   }
@@ -308,8 +300,8 @@ final class ProxyServerTests: XCTestCase {
     var ids = [UniqueIdentifier]()
     var apcs = [TestApc]()
     for _ in 0..<2 {
-      let apc = try await TestApc(port: server.port)
-      try await apc.send(appConnectRequest(host: "127.0.0.1", port: server.port).serialized())
+      let apc = try await TestApc(port: port)
+      try await apc.send(testConnectRequest(port: port))
       _ = try await apc.readHead()
       _ = try await apc.readAppdu()
       try await apc.send(Appdu.entityIDRequest(apcMacAddress: apcMacAddress, entityID: requested).serialized())
@@ -326,7 +318,7 @@ final class ProxyServerTests: XCTestCase {
   }
 
   private func upgrade(_ apc: TestApc) async throws {
-    var upgrade = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:\(server.port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+    var upgrade = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
     upgrade += "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
     try await apc.send(Array(upgrade.utf8))
     _ = try await apc.readHead()
@@ -334,43 +326,41 @@ final class ProxyServerTests: XCTestCase {
   }
 
   func testATextMessageClosesTheWebSocketWith1003() async throws {
-    let apc = try await TestApc(port: server.port)
+    let apc = try await TestApc(port: port)
     try await upgrade(apc)
-    try await apc.send(webSocketFrame(.text, Array("hello".utf8), maskingKey: [1, 2, 3, 4]))
+    try await apc.send(testWebSocketFrame(opcode: 0x1, Array("hello".utf8)))
     let code = try await apc.readCloseCode()
     XCTAssertEqual(code, 1003)
   }
 
-  func testARequestDribbledPastItsDeadlineIsDropped() async throws {
-    serverTask.cancel()
-    _ = await serverTask.result
-    try startServer(maximumConnections: 8, requestTimeout: .milliseconds(300))
-    let apc = try await TestApc(port: server.port)
-    let start = ContinuousClock.now
-    var closed = false
-    for byte in "CONNECT / HTTP/1.1\r\nHost: 127.0.0.1\r\n".utf8 {
-      do {
-        try await apc.send([byte])
-      } catch {
-        closed = true
-        break
-      }
-      try await Task.sleep(for: .milliseconds(50))
-    }
-    if !closed {
-      let rest = try await apc.readToEnd()
-      XCTAssertEqual(rest, [])
-    }
-    XCTAssertLessThan(ContinuousClock.now - start, .seconds(3))
+  func testAnAppduSplitAcrossWebSocketMessagesIsAccepted() async throws {
+    let apc = try await TestApc(port: port)
+    try await upgrade(apc)
+    let request = Appdu.entityIDRequest(apcMacAddress: apcMacAddress, entityID: UniqueIdentifier(0x42)).serialized()
+    try await apc.send(testWebSocketFrame(opcode: 0x2, Array(request.prefix(5))))
+    try await apc.send(testWebSocketFrame(opcode: 0x2, Array(request.dropFirst(5))))
+    let response = try await apc.readMessageAppdu()
+    XCTAssertEqual(response.entityID, UniqueIdentifier(0x42))
+  }
+
+  func testAnOversizedWebSocketMessageClosesWith1009() async throws {
+    let apc = try await TestApc(port: port)
+    try await upgrade(apc)
+    // fragments, so that only the assembled message is too long
+    let fragment = [UInt8](repeating: 0, count: 3000)
+    try await apc.send(testWebSocketFrame(opcode: 0x2, fragment, fin: false))
+    try await apc.send(testWebSocketFrame(opcode: 0x0, fragment))
+    let code = try await apc.readCloseCode()
+    XCTAssertEqual(code, 1009)
   }
 
   func testAConnectionThatHasNotSentItsRequestUsesNoSlot() async throws {
     serverTask.cancel()
     _ = await serverTask.result
-    try startServer(maximumConnections: 1)
-    let idle = try await TestApc(port: server.port)
-    let apc = try await TestApc(port: server.port)
-    try await apc.send(appConnectRequest(host: "127.0.0.1", port: server.port).serialized())
+    try await startServer(maximumConnections: 1)
+    let idle = try await TestApc(port: port)
+    let apc = try await TestApc(port: port)
+    try await apc.send(testConnectRequest(port: port))
     let head = try await apc.readHead()
     XCTAssertEqual(head, "HTTP/1.1 200 OK\r\n\r\n")
     _ = idle
@@ -378,8 +368,8 @@ final class ProxyServerTests: XCTestCase {
 
   func testAnEntityIDAdvertisedOnTheLanIsNotAssigned() async throws {
     let lanID = UniqueIdentifier(0x0200_00FF_FE00_0042)
-    let apc = try await TestApc(port: server.port)
-    try await apc.send(appConnectRequest(host: "127.0.0.1", port: server.port).serialized())
+    let apc = try await TestApc(port: port)
+    try await apc.send(testConnectRequest(port: port))
     _ = try await apc.readHead()
     _ = try await apc.readAppdu()
     try await entitySends(makeAdpdu(entityID: lanID.rawValue))
@@ -393,13 +383,17 @@ final class ProxyServerTests: XCTestCase {
   func testAnApcThatStopsReadingIsDisconnected() async throws {
     serverTask.cancel()
     _ = await serverTask.result
-    try startServer(maximumConnections: 8, writeTimeout: .milliseconds(500))
-    let apc = try await TestApc(port: server.port, receiveBufferSize: 2048)
-    try await apc.send(appConnectRequest(host: "127.0.0.1", port: server.port).serialized())
+    try await startServer(maximumConnections: 8, writeTimeout: .milliseconds(500))
+    let apc = try await TestApc(port: port, receiveBufferSize: 2048)
+    try await apc.send(testConnectRequest(port: port))
     _ = try await apc.readHead()
-    // the APC reads nothing more while the LAN floods it
-    for _ in 0..<4000 {
-      try await entitySends(makeAvtpdu())
+    // the APC reads nothing more while the LAN floods it, steadily enough that the connection's
+    // queues, bounded and dropping what overflows, keep it writing
+    for _ in 0..<80 {
+      for _ in 0..<50 {
+        try await entitySends(makeAvtpdu())
+      }
+      try await Task.sleep(for: .milliseconds(10))
     }
     try await Task.sleep(for: .seconds(2))
     // what was buffered, then the end of the connection rather than a timeout
@@ -409,8 +403,8 @@ final class ProxyServerTests: XCTestCase {
   }
 
   func testTheLinkGoingDownIsReported() async throws {
-    let apc = try await TestApc(port: server.port)
-    try await apc.send(appConnectRequest(host: "127.0.0.1", port: server.port).serialized())
+    let apc = try await TestApc(port: port)
+    try await apc.send(testConnectRequest(port: port))
     _ = try await apc.readHead()
     let awaited11 = try await apc.readAppdu().messageType
     XCTAssertEqual(awaited11, .linkUp)

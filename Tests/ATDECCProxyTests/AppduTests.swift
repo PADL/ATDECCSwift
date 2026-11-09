@@ -16,6 +16,8 @@
 
 import ATDECC
 @testable import ATDECCProxy
+import FlyingFox
+import Foundation
 import IEEE802
 import XCTest
 
@@ -125,142 +127,48 @@ final class AppduTests: XCTestCase {
   }
 }
 
-final class AppHTTPTests: XCTestCase {
-  private func head(_ text: String) -> AppHTTPRequestHead {
-    AppHTTPRequestHead(bytes: Array(text.utf8))!
+final class AppRequestTests: XCTestCase {
+  private func request(_ method: HTTPMethod, _ path: String, version: HTTPVersion = .http11, headers: [HTTPHeader: String] = [:]) -> HTTPRequest {
+    HTTPRequest(method: method, version: version, path: path, query: [], headers: headers, body: Data())
   }
 
-  private func webSocketUpgrade(origin: String? = "https://noodlescontroller.com", path: String = "/ws") -> String {
-    var text = "GET \(path) HTTP/1.1\r\nHost: brohavn:17221\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-    text += "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
-    if let origin { text += "Origin: \(origin)\r\n" }
-    return text + "\r\n"
+  private func upgrade(origin: String? = "https://noodlescontroller.com", path: String = "/ws") -> HTTPRequest {
+    var headers: [HTTPHeader: String] = [.host: "brohavn:17221", .upgrade: "websocket", .connection: "Upgrade"]
+    if let origin { headers[HTTPHeader("Origin")] = origin }
+    return request(.GET, path, headers: headers)
   }
 
-  func testTheConnectRequestOfClauseC5327IsAccepted() {
-    let request = appConnectRequest(host: "brohavn", port: 17221)
-    XCTAssertEqual(String(decoding: request.serialized(), as: UTF8.self), "CONNECT / HTTP/1.1\r\nHost: brohavn:17221\r\n\r\n")
-    let parsed = AppHTTPRequestHead(bytes: request.serialized())
-    XCTAssertEqual(parsed, request)
-    let outcome = appRequestOutcome(on: request, allowedWebSocketOrigins: [])
-    XCTAssertEqual(outcome.requestValid, 200)
-    XCTAssertEqual(String(decoding: outcome.response, as: UTF8.self), "HTTP/1.1 200 OK\r\n\r\n")
-  }
-
-  func testRequestHeadEndIsFound() {
-    let bytes = Array("CONNECT / HTTP/1.1\r\nHost: a:1\r\n\r\n".utf8) + [0x00, 0x01]
-    XCTAssertEqual(AppHTTPRequestHead.endOfHead(in: bytes), bytes.count - 2)
-    XCTAssertNil(AppHTTPRequestHead.endOfHead(in: Array("CONNECT / HTTP/1.1\r\n".utf8)))
-    XCTAssertNil(AppHTTPRequestHead(bytes: Array("NONSENSE\r\n\r\n".utf8)))
-    XCTAssertNil(AppHTTPRequestHead(bytes: Array("GET / HTTP/1.1\r\nno colon\r\n\r\n".utf8)))
+  func testConnectIsAcceptedOnAnyTarget() {
+    for path in ["/", "/proxy"] {
+      let outcome = appRequestOutcome(on: request(.CONNECT, path), allowedWebSocketOrigins: [])
+      XCTAssertEqual(outcome.requestValid, 200)
+      XCTAssertEqual(outcome.transport, .connect)
+    }
   }
 
   func testOtherRequestsAreRefused() {
-    XCTAssertEqual(appRequestOutcome(on: head("GET / HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 404)
-    let post = appRequestOutcome(on: head("POST /ws HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: [])
+    XCTAssertEqual(appRequestOutcome(on: request(.GET, "/"), allowedWebSocketOrigins: []).requestValid, 404)
+    XCTAssertEqual(appRequestOutcome(on: request(.POST, "/"), allowedWebSocketOrigins: []).requestValid, 404)
+    let post = appRequestOutcome(on: request(.POST, "/ws"), allowedWebSocketOrigins: [])
     XCTAssertEqual(post.requestValid, 405)
-    XCTAssertTrue(String(decoding: post.response, as: UTF8.self).contains("\r\nAllow: GET\r\n"))
-    XCTAssertEqual(appRequestOutcome(on: head("POST / HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 404)
-    XCTAssertEqual(appRequestOutcome(on: head("CONNECT / HTTP/2.0\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 505)
-    XCTAssertEqual(appRequestOutcome(on: head("GET /ws HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).requestValid, 426)
-    let refusal = String(decoding: appRequestOutcome(on: head("GET / HTTP/1.1\r\n\r\n"), allowedWebSocketOrigins: []).response, as: UTF8.self)
-    XCTAssertEqual(refusal, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+    XCTAssertEqual(post.refusal.headers[HTTPHeader("Allow")], "GET")
+    XCTAssertEqual(post.refusal.statusCode.code, 405)
+    let http2 = appRequestOutcome(on: request(.CONNECT, "/", version: HTTPVersion("HTTP/2")), allowedWebSocketOrigins: [])
+    XCTAssertEqual(http2.requestValid, 505)
   }
 
-  /// The upgrade the Noodles controller makes: GET /ws, no subprotocol, from its origin.
-  func testTheNoodlesUpgradeIsAcceptedWithTheRFC6455AcceptValue() {
-    let outcome = appRequestOutcome(on: head(webSocketUpgrade()), allowedWebSocketOrigins: AppNoodlesWebSocketOrigins)
+  /// The upgrade the Noodles controller makes: GET /ws from its origin, no subprotocol.
+  func testTheNoodlesUpgradeIsAccepted() {
+    let outcome = appRequestOutcome(on: upgrade(), allowedWebSocketOrigins: AppNoodlesWebSocketOrigins)
     XCTAssertEqual(outcome.requestValid, 200)
-    XCTAssertEqual(outcome.transport, .webSocket(key: "dGhlIHNhbXBsZSBub25jZQ=="))
-    let response = String(decoding: outcome.response, as: UTF8.self)
-    XCTAssertTrue(response.hasPrefix("HTTP/1.1 101 Switching Protocols\r\n"))
-    XCTAssertTrue(response.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"))
-    XCTAssertFalse(response.contains("Sec-WebSocket-Protocol"))
+    XCTAssertEqual(outcome.transport, .webSocket)
   }
 
   func testWebSocketOriginsAreChecked() {
     let allowed = AppNoodlesWebSocketOrigins
-    XCTAssertEqual(appRequestOutcome(on: head(webSocketUpgrade(origin: "https://evil.example")), allowedWebSocketOrigins: allowed).requestValid, 403)
-    XCTAssertEqual(appRequestOutcome(on: head(webSocketUpgrade(origin: "http://brohavn:17221")), allowedWebSocketOrigins: []).requestValid, 200)
-    XCTAssertEqual(appRequestOutcome(on: head(webSocketUpgrade(origin: nil)), allowedWebSocketOrigins: []).requestValid, 200)
-    XCTAssertEqual(appRequestOutcome(on: head(webSocketUpgrade(origin: "https://app.noodlescontroller.com")), allowedWebSocketOrigins: allowed).requestValid, 200)
-    XCTAssertEqual(appRequestOutcome(on: head(webSocketUpgrade(path: "/ws?x=1")), allowedWebSocketOrigins: allowed).requestValid, 200)
-  }
-
-  func testSHA1AndBase64MatchTheirTestVectors() {
-    XCTAssertEqual(base64Encode(sha1(Array("abc".utf8))), "qZk+NkcGgWq6PiVxeFDCbJzQ2J0=")
-    XCTAssertEqual(base64Encode(sha1([])), "2jmj7l5rSw0yVb/vlWAYkK/YBwk=")
-    XCTAssertEqual(base64Encode(Array("fo".utf8)), "Zm8=")
-    XCTAssertEqual(base64Encode(Array("f".utf8)), "Zg==")
-  }
-}
-
-final class WebSocketFrameTests: XCTestCase {
-  private let mask: [UInt8] = [0x37, 0xFA, 0x21, 0x3D]
-
-  func testMaskedFramesFromRFC6455Section572Decode() throws {
-    var decoder = WebSocketFrameDecoder()
-    // a masked "Hello"
-    let messages = try decoder.decode([0x81, 0x85, 0x37, 0xFA, 0x21, 0x3D, 0x7F, 0x9F, 0x4D, 0x51, 0x58])
-    XCTAssertEqual(messages, [.text(Array("Hello".utf8))])
-    XCTAssertEqual(webSocketFrame(.text, Array("Hello".utf8), maskingKey: mask), [0x81, 0x85] + mask + [0x7F, 0x9F, 0x4D, 0x51, 0x58])
-    XCTAssertEqual(webSocketFrame(.text, Array("Hello".utf8)), [0x81, 0x05, 0x48, 0x65, 0x6C, 0x6C, 0x6F])
-  }
-
-  func testFragmentsAndInterleavedControlFramesAreAssembled() throws {
-    var decoder = WebSocketFrameDecoder()
-    let first = webSocketFrame(.binary, [1, 2], maskingKey: mask)
-    var firstUnfinished = first
-    firstUnfinished[0] &= 0x7F
-    var last = webSocketFrame(.continuation, [3], maskingKey: mask)
-    last[0] = 0x80
-    let ping = webSocketFrame(.ping, [9], maskingKey: mask)
-    let stream = firstUnfinished + ping + last
-    var messages = [WebSocketMessage]()
-    for byte in stream {
-      messages += try decoder.decode([byte])
-    }
-    XCTAssertEqual(messages, [.ping([9]), .binary([1, 2, 3])])
-  }
-
-  func testExtendedLengthsDecode() throws {
-    var decoder = WebSocketFrameDecoder()
-    let payload = [UInt8](repeating: 0xAB, count: 1512)
-    XCTAssertEqual(try decoder.decode(webSocketFrame(.binary, payload, maskingKey: mask)), [.binary(payload)])
-  }
-
-  func testUnmaskedAndOversizedClientFramesAreRefused() {
-    var decoder = WebSocketFrameDecoder()
-    XCTAssertThrowsError(try decoder.decode(webSocketFrame(.binary, [1]))) {
-      XCTAssertEqual($0 as? WebSocketError, .unmaskedClientFrame)
-    }
-    var other = WebSocketFrameDecoder()
-    let huge = webSocketFrame(.binary, [UInt8](repeating: 0, count: AppWebSocketMaximumMessageLength + 1), maskingKey: mask)
-    XCTAssertThrowsError(try other.decode(huge)) { XCTAssertEqual($0 as? WebSocketError, .messageTooLong) }
-  }
-
-  func testChannelReaderReadsOneAppduPerMessageAndAcceptsSplits() throws {
-    var reader = AppChannelReader(transport: .webSocket(key: "k"))
-    let request = Appdu.entityIDRequest(apcMacAddress: apcMacAddress, entityID: UniqueIdentifier()).serialized()
-    let whole = webSocketFrame(.binary, request, maskingKey: mask)
-    let split = webSocketFrame(.binary, Array(request.prefix(5)), maskingKey: mask) +
-      webSocketFrame(.binary, Array(request.dropFirst(5)), maskingKey: mask)
-    for bytes in [whole, split] {
-      let items = try reader.read(bytes)
-      XCTAssertEqual(items.count, 1)
-      guard case let .appdu(appdu) = items.first else { return XCTFail("no APPDU") }
-      XCTAssertEqual(appdu.messageType, .entityIDRequest)
-    }
-    let pingItems = try reader.read(webSocketFrame(.ping, [7], maskingKey: mask))
-    guard case let .reply(pong) = pingItems.first else { return XCTFail("no pong") }
-    XCTAssertEqual(pong, [0x8A, 0x01, 0x07])
-    // a close is answered by the connection, once, not by the reader
-    let closeItems = try reader.read(webSocketFrame(.close, [0x03, 0xE8], maskingKey: mask))
-    XCTAssertEqual(closeItems.count, 1)
-    guard case .closed = closeItems.first else { return XCTFail("no close") }
-    var other = AppChannelReader(transport: .webSocket(key: "k"))
-    XCTAssertThrowsError(try other.read(webSocketFrame(.text, [0x41], maskingKey: mask))) {
-      XCTAssertEqual(($0 as? AppChannelReader.Error)?.webSocketCloseCode, 1003)
-    }
+    XCTAssertEqual(appRequestOutcome(on: upgrade(origin: "https://evil.example"), allowedWebSocketOrigins: allowed).requestValid, 403)
+    XCTAssertEqual(appRequestOutcome(on: upgrade(origin: "http://brohavn:17221"), allowedWebSocketOrigins: []).requestValid, 200)
+    XCTAssertEqual(appRequestOutcome(on: upgrade(origin: nil), allowedWebSocketOrigins: []).requestValid, 200)
+    XCTAssertEqual(appRequestOutcome(on: upgrade(origin: "https://app.noodlescontroller.com"), allowedWebSocketOrigins: allowed).requestValid, 200)
   }
 }

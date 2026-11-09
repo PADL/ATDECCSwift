@@ -52,6 +52,7 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/PADL/IEEE802Swift", from: "0.2.1"),
     .package(url: "https://github.com/PADL/IORingSwift", from: "2.3.1"),
+    .package(url: "https://github.com/swhitty/FlyingFox", from: "0.26.2"),
     .package(url: "https://github.com/PADL/SocketAddress", from: "0.5.2"),
     .package(url: "https://github.com/apple/swift-system", from: "1.2.1"),
     .package(url: "https://github.com/apple/swift-binary-parsing", from: "0.0.2"),
@@ -84,9 +85,9 @@ let package = Package(
         "ATDECC",
         .product(name: "IEEE802", package: "IEEE802Swift"),
         .product(name: "IEEE802Linux", package: "IEEE802Swift", condition: .when(platforms: [.linux])),
-        .product(name: "IORing", package: "IORingSwift", condition: .when(platforms: [.linux])),
-        .product(name: "IORingUtils", package: "IORingSwift", condition: .when(platforms: [.linux])),
-        .product(name: "SystemPackage", package: "swift-system", condition: .when(platforms: [.linux])),
+        // HTTP CONNECT and WebSocket; the layer 2 side is ATDECC's own ports
+        .product(name: "FlyingFox", package: "FlyingFox"),
+        .product(name: "FlyingSocks", package: "FlyingFox"),
         .product(name: "Logging", package: "swift-log"),
       ],
       swiftSettings: CommonSwiftSettings
