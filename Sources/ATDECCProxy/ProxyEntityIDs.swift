@@ -103,6 +103,7 @@ public final class AtdeccProxyEntityIDs: Sendable {
     guard let adpdu = try? Adpdu(bytes: avtpdu) else { return }
     let now = clock()
     state.withLock { state in
+      Self.prune(&state, at: now)
       switch adpdu.messageType {
       case .entityAvailable:
         state.advertised[adpdu.entityID] = Advertisement(expiry: now + 2 * UInt64(adpdu.validTime), sender: connection)
@@ -120,6 +121,7 @@ public final class AtdeccProxyEntityIDs: Sendable {
     guard let adpdu = try? Adpdu(bytes: avtpdu) else { return }
     let now = clock()
     state.withLock { state in
+      Self.prune(&state, at: now)
       switch adpdu.messageType {
       case .entityAvailable:
         let sender = state.advertised[adpdu.entityID]?.sender.flatMap { state.connections.contains($0) ? $0 : nil }
@@ -130,6 +132,11 @@ public final class AtdeccProxyEntityIDs: Sendable {
         break
       }
     }
+  }
+
+  /// How many advertisements are held, expired ones included until the next is observed.
+  var advertisementCount: Int {
+    state.withLock { $0.advertised.count }
   }
 
   /// Whether `id` is known not to be unique for the APC of `connection`.
@@ -145,6 +152,12 @@ public final class AtdeccProxyEntityIDs: Sendable {
     }
     ids.subtract(state.held[connection].map { [$0] } ?? [])
     return ids
+  }
+
+  /// Forgets advertisements whose valid_time has passed, so the table holds only the LAN's
+  /// current entities.
+  private static func prune(_ state: inout State, at now: UInt64) {
+    state.advertised = state.advertised.filter { $0.value.expiry > now }
   }
 
   private static func isAssignable(_ id: UniqueIdentifier) -> Bool {

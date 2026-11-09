@@ -80,7 +80,8 @@ private let _drainTimeout = Duration.seconds(2)
 public final class AtdeccProxyServer<Port: NetworkPort>: Sendable {
   public let configuration: AtdeccProxyServerConfiguration
   public let entityIDs: AtdeccProxyEntityIDs
-  private let servers: [HTTPServer]
+  /// Each listener's server, and for the IPv6 wildcard, the IPv4 one to use if IPv6 is off.
+  private let servers: [(server: HTTPServer, ipv4Fallback: HTTPServer?)]
   private let logger: Logger
 
   /// Listens on `configuration.port` at each of `configuration.addresses` once run.
@@ -104,12 +105,27 @@ public final class AtdeccProxyServer<Port: NetworkPort>: Sendable {
       makePort: makePort,
       logger: logger
     )
-    servers = try Self.addresses(configuration).map { address in
-      HTTPServer(
-        config: HTTPServer.Configuration(address: address, logger: AtdeccProxyHTTPLogging(logger: logger)),
-        handler: handler
-      )
+    let makeServer = { (address: any SocketAddress) in
+      HTTPServer(config: Self.serverConfiguration(address, logger: logger), handler: handler)
     }
+    servers = try Self.addresses(configuration).map { address in
+      let isWildcard = address is sockaddr_in6 && configuration.addresses.contains("::")
+      let fallback = isWildcard ? makeServer(sockaddr_in.inet(port: configuration.port)) : nil
+      return (makeServer(address), fallback)
+    }
+  }
+
+  private static func serverConfiguration(_ address: some SocketAddress, logger: Logger) -> HTTPServer.Configuration {
+    #if HTTPTunnel
+    // FlyingFox's main branch, which the trait needs, bounds incoming WebSocket frames
+    HTTPServer.Configuration(
+      address: address,
+      webSocketMaxFrameSize: AppWebSocketMaximumMessageLength,
+      logger: AtdeccProxyHTTPLogging(logger: logger)
+    )
+    #else
+    HTTPServer.Configuration(address: address, logger: AtdeccProxyHTTPLogging(logger: logger))
+    #endif
   }
 
   /// One socket address per listening address; with a wildcard, that alone, since an IPv6
@@ -125,31 +141,53 @@ public final class AtdeccProxyServer<Port: NetworkPort>: Sendable {
 
   /// Serves APCs until the task is cancelled, then closes every connection (FINISH). A listener
   /// that fails, because accepting failed for want of descriptors say, or its address is not
-  /// yet configured, is logged and started again.
+  /// yet configured, is logged (again when its error changes) and started again; one on the
+  /// IPv6 wildcard that cannot bind for want of IPv6 listens on the IPv4 wildcard instead.
+  /// FlyingFox ends a listener, and the connections it serves, when an accept fails.
   public func run() async throws {
     logger.info("ATDECC proxy listening on TCP port \(configuration.port) at \(configuration.addresses.joined(separator: ", "))")
     await withDiscardingTaskGroup { group in
-      for server in servers {
+      for (server, ipv4Fallback) in servers {
         group.addTask { [logger] in
-          var hasLogged = false
-          while !Task.isCancelled {
-            do {
-              try await server.run()
-            } catch {
-              guard !Task.isCancelled else { return }
-              if !hasLogged { logger.warning("ATDECC proxy listener failed, restarting it: \(error)") }
-              hasLogged = true
-              try? await Task.sleep(for: .seconds(1))
-            }
-          }
+          await Self.serve(server, ipv4Fallback: ipv4Fallback, logger: logger)
         }
       }
     }
   }
 
+  private static func serve(_ server: HTTPServer, ipv4Fallback: HTTPServer?, logger: Logger) async {
+    var server = server
+    var ipv4Fallback = ipv4Fallback
+    var lastError: String?
+    while !Task.isCancelled {
+      do {
+        try await server.run()
+      } catch {
+        guard !Task.isCancelled else { return }
+        if let fallback = ipv4Fallback, Self.isIPv6Unavailable(error) {
+          logger.notice("ATDECC proxy listening on the IPv4 wildcard: IPv6 is unavailable (\(error))")
+          server = fallback
+          ipv4Fallback = nil
+          continue
+        }
+        let description = "\(error)"
+        if description != lastError {
+          logger.warning("ATDECC proxy listener failed, restarting it: \(error)")
+          lastError = description
+        }
+        try? await Task.sleep(for: .seconds(1))
+      }
+    }
+  }
+
+  private static func isIPv6Unavailable(_ error: any Error) -> Bool {
+    guard case let .failed(_, errno, _) = error as? SocketError else { return false }
+    return errno == EAFNOSUPPORT || errno == EADDRNOTAVAIL || errno == EPROTONOSUPPORT
+  }
+
   /// Waits until every address is listening.
   public func waitUntilListening(timeout: TimeInterval = 5) async throws {
-    for server in servers {
+    for (server, _) in servers {
       try await server.waitUntilListening(timeout: timeout)
     }
   }
@@ -157,7 +195,7 @@ public final class AtdeccProxyServer<Port: NetworkPort>: Sendable {
   /// The port each address listens on, once listening.
   public func listeningPorts() async -> [UInt16] {
     var ports = [UInt16]()
-    for server in servers {
+    for (server, _) in servers {
       switch await server.listeningAddress {
       case let .ip4(_, port), let .ip6(_, port): ports.append(port)
       default: break
@@ -271,18 +309,20 @@ private struct AtdeccProxyTunnel<Port: NetworkPort>: HTTPTunnelHandler {
 
   func handleTunnel(bytes: some AsyncBufferedSequence<UInt8>, socket: AsyncSocket) async throws {
     configureLiveness(socket.socket)
-    let descriptor = socket.socket.file.rawValue
+    let shutter = AtdeccProxySocketShutter(socket.socket)
+    // shut down after this returns, a descriptor FlyingFox has closed may belong to another
+    defer { shutter.invalidate() }
     // ending the connection at once fails a write waiting on an APC that has stopped reading
-    connection.onAbort { _ = Glibc.shutdown(descriptor, Int32(SHUT_RDWR)) }
+    connection.onAbort { shutter.shutdown(SHUT_RDWR) }
     let writer = Task { [connection, configuration, logger] in
       do {
         for await output in connection.output {
           guard case let .appdu(appdu) = output else { continue }
-          try await Self.write(Data(appdu.serialized()), to: socket, within: configuration.writeTimeout)
+          try await Self.write(Data(appdu.serialized()), to: socket, shutter: shutter, within: configuration.writeTimeout)
         }
       } catch {
         logger.debug("ATDECC proxy could not write to an APC: \(error)")
-        _ = Glibc.shutdown(descriptor, Int32(SHUT_RDWR))
+        shutter.shutdown(SHUT_RDWR)
       }
     }
     let reader = Task { [connection, logger] in
@@ -292,22 +332,26 @@ private struct AtdeccProxyTunnel<Port: NetworkPort>: HTTPTunnelHandler {
     // what is queued is written for a little while, then the connection is ended
     let deadline = Task {
       try await Task.sleep(for: _drainTimeout)
-      _ = Glibc.shutdown(descriptor, Int32(SHUT_RDWR))
+      shutter.shutdown(SHUT_RDWR)
     }
     await writer.value
     deadline.cancel()
-    _ = Glibc.shutdown(descriptor, Int32(SHUT_RD))
+    shutter.shutdown(SHUT_RD)
     await reader.value
     _ = slot
   }
 
   /// Writes `data`, ending the connection if the APC has not read enough of it within
   /// `timeout`, which fails the write.
-  private static func write(_ data: Data, to socket: AsyncSocket, within timeout: Duration) async throws {
-    let descriptor = socket.socket.file.rawValue
+  private static func write(
+    _ data: Data,
+    to socket: AsyncSocket,
+    shutter: AtdeccProxySocketShutter,
+    within timeout: Duration
+  ) async throws {
     let deadline = Task {
       try await Task.sleep(for: timeout)
-      _ = Glibc.shutdown(descriptor, Int32(SHUT_RDWR))
+      shutter.shutdown(SHUT_RDWR)
     }
     defer { deadline.cancel() }
     try await socket.write(data)
@@ -340,6 +384,28 @@ private struct AtdeccProxyTunnel<Port: NetworkPort>: HTTPTunnelHandler {
       logger.debug("ATDECC proxy closing a connection: \(error)")
     }
     await connection.apcClosed(closeCode: nil)
+  }
+}
+
+
+/// Shuts a tunnel's socket down, which wakes a read or write waiting on it, for as long as the
+/// tunnel has it: once the handler returns FlyingFox closes the descriptor, and its number may
+/// be another's.
+private final class AtdeccProxySocketShutter: Sendable {
+  private let descriptor: Mutex<Int32?>
+
+  init(_ socket: Socket) {
+    descriptor = Mutex(socket.file.rawValue)
+  }
+
+  func shutdown(_ how: Int) {
+    descriptor.withLock { descriptor in
+      if let descriptor { _ = Glibc.shutdown(descriptor, Int32(how)) }
+    }
+  }
+
+  func invalidate() {
+    descriptor.withLock { $0 = nil }
   }
 }
 

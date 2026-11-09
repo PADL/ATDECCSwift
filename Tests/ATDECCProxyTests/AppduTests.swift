@@ -175,6 +175,19 @@ final class AppRequestTests: XCTestCase {
     XCTAssertEqual(outcome.transport, .webSocket)
   }
 
+  /// A page served by the APS's own host may connect, whatever its port.
+  func testThePagesOwnHostIsComparedWithoutPorts() {
+    XCTAssertTrue(isAllowedWebSocketOrigin("http://10.10.32.8", host: "10.10.32.8:17221", allowedHosts: []))
+    XCTAssertTrue(isAllowedWebSocketOrigin("http://brohavn:8080", host: "brohavn:17221", allowedHosts: []))
+    XCTAssertTrue(isAllowedWebSocketOrigin("http://[fe80::1]:8080", host: "[fe80::1]:17221", allowedHosts: []))
+    XCTAssertFalse(isAllowedWebSocketOrigin("http://[fe80::2]", host: "[fe80::1]:17221", allowedHosts: []))
+    XCTAssertFalse(isAllowedWebSocketOrigin("http://10.10.32.9", host: "10.10.32.8:17221", allowedHosts: []))
+    XCTAssertEqual(hostPart(of: "[fe80::1]:8080"), "[fe80::1]")
+    XCTAssertEqual(hostPart(of: "[::1]"), "[::1]")
+    XCTAssertEqual(hostPart(of: "10.10.32.8:17221"), "10.10.32.8")
+    XCTAssertEqual(hostPart(of: "brohavn"), "brohavn")
+  }
+
   func testWebSocketOriginsAreChecked() {
     let allowed = AppNoodlesWebSocketOrigins
     XCTAssertEqual(appRequestOutcome(on: upgrade(origin: "https://evil.example"), allowedWebSocketOrigins: allowed).requestValid, 403)

@@ -15,7 +15,7 @@
 //
 
 import ATDECC
-import ATDECCProxy
+@testable import ATDECCProxy
 import IEEE802
 import Synchronization
 import XCTest
@@ -296,6 +296,14 @@ final class EntityIDTrackingTests: XCTestCase {
     XCTAssertEqual(entityIDs.assign(connection, requested: lanID), lanID)
     entityIDs.observe(makeAdpdu(entityID: lanID.rawValue))
     XCTAssertEqual(entityIDs.assign(connection, requested: lanID), lanID)
+  }
+
+  func testExpiredAdvertisementsArePruned() {
+    entityIDs.observe(makeAdpdu(entityID: lanID.rawValue, validTime: 1))
+    XCTAssertEqual(entityIDs.advertisementCount, 1)
+    advance(to: 3)
+    entityIDs.observe(makeAdpdu(entityID: 0x0200_00FF_FE00_0043))
+    XCTAssertEqual(entityIDs.advertisementCount, 1)
   }
 
   func testDerivedIDsAvoidThoseOnTheLan() {

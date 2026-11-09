@@ -17,7 +17,7 @@
 #if os(Linux)
 
 import ATDECC
-import ATDECCProxy
+@testable import ATDECCProxy
 import Glibc
 import IEEE802
 import IORing
@@ -25,6 +25,7 @@ import IORingUtils
 import Logging
 import SocketAddress
 import Synchronization
+import struct SystemPackage.Errno
 import XCTest
 
 private let timeout = Duration.seconds(5)
@@ -401,6 +402,19 @@ final class ProxyServerTests: XCTestCase {
     XCTAssertEqual(code, 1009)
   }
 
+  #if HTTPTunnel
+  /// FlyingFox's main branch, which the trait needs, bounds each frame to the largest message.
+  func testAnOversizedWebSocketFrameEndsTheConnection() async throws {
+    let apc = try await TestApc(port: port)
+    try await upgrade(apc)
+    try await apc.send(testWebSocketFrame(opcode: 0x2, [UInt8](repeating: 0, count: AppWebSocketMaximumMessageLength + 1)))
+    // closed with the frame unread, so reset rather than ended; a timeout would fail
+    do {
+      _ = try await apc.readToEnd()
+    } catch let error as Errno where error == .connectionReset {}
+  }
+  #endif
+
   func testAConnectionThatHasNotSentItsRequestUsesNoSlot() async throws {
     serverTask.cancel()
     _ = await serverTask.result
@@ -458,6 +472,41 @@ final class ProxyServerTests: XCTestCase {
     connectionPorts.ports.withLock { $0.last }?.setLinkUp(false)
     let linkDown = try await apc.nextAppdu()
     XCTAssertEqual(linkDown.messageType, .linkDown)
+  }
+}
+
+/// A network port whose link state is never reported, so a connection waits before
+/// START_TRANSFER.
+private final class SilentPort: NetworkPort {
+  let macAddress: EUI48 = linkMacAddress
+
+  func send(_ packet: IEEE802Packet) async throws {}
+
+  func receive(_ handler: (IEEE802Packet) async -> ()) async throws {
+    try await Task.sleep(for: .seconds(3600))
+  }
+
+  func monitorLinkState(_ handler: (Bool) async -> ()) async throws {
+    try await Task.sleep(for: .seconds(3600))
+  }
+}
+
+final class ProxyConnectionTests: XCTestCase {
+  /// An APC that closes its WebSocket before the transfer starts is answered with its close.
+  func testAnEarlyCloseIsAnswered() async throws {
+    let connection = AtdeccProxyConnection(
+      port: SilentPort(),
+      entityIDs: AtdeccProxyEntityIDs(linkMacAddress: linkMacAddress),
+      logger: Logger(label: "test")
+    )
+    let run = Task { await connection.run() }
+    await connection.apcClosed(closeCode: 1000)
+    var outputs = [String]()
+    for await output in connection.output {
+      if case let .close(code) = output { outputs.append("close \(code.map(String.init) ?? "none")") }
+    }
+    await run.value
+    XCTAssertEqual(outputs, ["close 1000"])
   }
 }
 

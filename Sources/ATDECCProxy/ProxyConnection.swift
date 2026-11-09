@@ -119,7 +119,7 @@ final class AtdeccProxyConnection<Port: NetworkPort>: Sendable {
     var linkStatus = false
     var pending = [Event]()
     while let event = await iterator.next() {
-      if case .apcClosed = event { return close(closeCode: nil) }
+      if case let .apcClosed(code) = event { return close(closeCode: code) }
       if case let .link(isUp) = event {
         linkStatus = isUp
         break

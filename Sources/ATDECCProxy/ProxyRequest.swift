@@ -103,12 +103,23 @@ public func appRequestOutcome(on request: HTTPRequest, allowedWebSocketOrigins: 
 }
 
 /// Whether a WebSocket upgrade from a page at `origin` (its Origin field) is allowed: no Origin
-/// (not a browser), the APS's own `host`, or one of `allowedHosts`, each a host or host:port.
+/// (not a browser), a page served by the APS's own host (`host`, its Host field, compared by
+/// host alone, as a page at http://10.10.32.8 opens ws://10.10.32.8:17221), or one of
+/// `allowedHosts`, each a host or host:port.
 public func isAllowedWebSocketOrigin(_ origin: String?, host: String?, allowedHosts: [String]) -> Bool {
   guard let origin else { return true }
   guard let schemeEnd = origin.range(of: "://") else { return false }
   let authority = origin[schemeEnd.upperBound...].lowercased()
-  let hostOnly = authority.split(separator: ":").first.map(String.init) ?? authority
-  if let host, authority == host.lowercased() { return true }
-  return allowedHosts.contains { $0.lowercased() == authority || $0.lowercased() == hostOnly }
+  let originHost = hostPart(of: authority)
+  if let host, originHost == hostPart(of: host.lowercased()) { return true }
+  return allowedHosts.contains { $0.lowercased() == authority || $0.lowercased() == originHost }
+}
+
+/// The host of an authority, host or host:port, without the port; an IPv6 literal keeps its
+/// brackets ("[fe80::1]:8080" is "[fe80::1]").
+func hostPart(of authority: String) -> String {
+  if authority.hasPrefix("["), let close = authority.firstIndex(of: "]") {
+    return String(authority[...close])
+  }
+  return authority.split(separator: ":", maxSplits: 1).first.map(String.init) ?? authority
 }
