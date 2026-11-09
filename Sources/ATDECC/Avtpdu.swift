@@ -153,3 +153,16 @@ extension ParserSpan {
     return header
   }
 }
+
+/// The AVTPDU at the start of `payload`, a received Ethernet payload, without the padding that
+/// may follow it: the AVTP control header and control_data_length octets (IEEE 1722-2016
+/// §4.4.3). Throws if the payload is shorter than that, or the AVTPDU longer than
+/// `maximumLength`.
+public func avtpdu(withoutPaddingFrom payload: [UInt8], maximumLength: Int = 1500) throws -> [UInt8] {
+  let header = try payload.withParserSpan { try AvtpduControlHeader(parsing: &$0) }
+  let length = AvtpduControlHeader.length + Int(header.controlDataLength)
+  guard length <= payload.count, length <= maximumLength else {
+    throw AvdeccCodecError.invalidControlDataLength(header.controlDataLength)
+  }
+  return Array(payload.prefix(length))
+}
