@@ -35,7 +35,8 @@ public let AppWebSocketMaximumMessageLength = 4096
 public let AppNoodlesWebSocketOrigins = ["noodlescontroller.com", "app.noodlescontroller.com", "noodles-controller.web.app"]
 
 /// Whether this build serves HTTP CONNECT (the HTTPTunnel trait); without it, CONNECT is
-/// refused 501 and only WebSocket is served, so there is no Annex C entry point to advertise.
+/// refused 501 and only WebSocket is served, so there is no Annex C entry point to advertise,
+/// only `AppWebSocketServiceType`.
 #if HTTPTunnel
 public let AppServesConnect = true
 #else
