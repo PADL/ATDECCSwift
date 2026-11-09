@@ -150,7 +150,8 @@ final class ProxyServerTests: XCTestCase {
     }
     serverTask = Task { [server] in try await server!.run() }
     try await server.waitUntilListening()
-    port = await server.listeningPorts()[0]
+    guard let port = await server.listeningPorts().first else { throw POSIXError(.EADDRNOTAVAIL) }
+    self.port = port
   }
 
   /// A frame the entity sends, as on the LAN.
