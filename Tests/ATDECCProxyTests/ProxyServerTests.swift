@@ -337,7 +337,7 @@ final class ProxyServerTests: XCTestCase {
   /// other requests are left to the other routes, and a foreign origin is still refused.
   func testTheHandlerMountedOnASharedServerServesNoodles() async throws {
     let shared = HTTPServer(address: try sockaddr_in.inet(ip4: "127.0.0.1", port: 0), logger: .disabled)
-    await shared.appendRoute(AtdeccProxyHandler<VirtualPort>.webSocketRoute, to: makeHandler())
+    await shared.appendRoute(AppWebSocketRoute, to: makeHandler())
     await shared.appendRoute("GET /*") { _ in HTTPResponse(statusCode: .ok, body: Data("web".utf8)) }
     let sharedTask = Task { try await shared.run() }
     defer { sharedTask.cancel() }

@@ -43,21 +43,17 @@ public struct AtdeccProxyConfiguration: Sendable {
 /// An ATDECC Proxy Server (IEEE 1722.1-2021 Annex C) as a FlyingFox handler: it accepts APCs
 /// and relays ATDECC PDUs between each of them and the layer 2 network.
 ///
-/// It can be mounted at `webSocketRoute` on an HTTP server that serves other routes too, or
+/// It can be mounted at `AppWebSocketRoute` on an HTTP server that serves other routes too, or
 /// served on a port of its own by `AtdeccProxyServer`. An upgrade on `AppWebSocketPath` (an
 /// extension, for browser controllers) carries one APPDU per binary message; with the
 /// HTTPTunnel trait, CONNECT carries a byte stream of them. Each connection runs its own APS
 /// state machine (Clause C.5.2) over its own network port, made with `makePort`, so APCs see
 /// each other's frames as other controllers' on the LAN; the connection limit and the entity
-/// IDs are the handler's, however many servers it is mounted on. There is no authentication:
-/// any host that reaches the handler can send ATDECC frames on the LAN.
+/// IDs are the handler's, however many servers it is mounted on. A message longer than
+/// `AppWebSocketMaximumMessageLength` is closed 1009, but each frame is read whole first, up to
+/// the server's bound (FlyingFox's `webSocketMaxFrameSize`), which a host server sets. There is
+/// no authentication: any host that reaches the handler can send ATDECC frames on the LAN.
 public final class AtdeccProxyHandler<Port: NetworkPort>: HTTPHandler, Sendable {
-  /// The route to mount the handler on beside other routes: WebSocket upgrades on
-  /// `AppWebSocketPath`. Mount it before any route that would match that path too.
-  public static var webSocketRoute: HTTPRoute {
-    HTTPRoute("GET \(AppWebSocketPath)")
-  }
-
   public let configuration: AtdeccProxyConfiguration
   public let entityIDs: AtdeccProxyEntityIDs
   private let slots: AtdeccProxySlots
