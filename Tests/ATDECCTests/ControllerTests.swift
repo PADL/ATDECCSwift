@@ -1117,8 +1117,8 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
-  /// A controller's first command is sent once its end station receives, so that its response
-  /// is received rather than lost, and the command retried after its timeout.
+  /// A controller is created once its end station receives, so that the response to its first
+  /// command is received rather than lost, and the command retried after its timeout.
   func testFirstAcmpCommandIsAnswered() async throws {
     let port = LateReceivingPort(network: network, receptionDelay: .milliseconds(50))
     let endStation = EndStation(port: port, logger: Logger(label: "ControllerTests"))
@@ -1136,8 +1136,8 @@ final class ControllerTests: XCTestCase {
     await endStation.close()
   }
 
-  /// A first command on a port whose link is down, or whose reception fails, is sent, and
-  /// times out, rather than waiting for reception.
+  /// A controller on a port whose link is down, or whose reception fails, is created, and its
+  /// first command sent and timed out, rather than waiting for reception.
   func testFirstAcmpCommandOnAPortThatDoesNotReceive() async throws {
     let downPort = network.makePort(macAddress: controllerMacAddress)
     downPort.setLinkUp(false)
@@ -1152,22 +1152,24 @@ final class ControllerTests: XCTestCase {
     }
   }
 
-  /// A controller started on an end station whose link is already down does not wait for it.
+  /// A controller created on an end station whose link is already down does not wait for it.
   func testLaterControllerOnADownLinkDoesNotWait() async throws {
     let port = network.makePort(macAddress: controllerMacAddress)
     port.setLinkUp(false)
     let endStation = EndStation(port: port, logger: Logger(label: "ControllerTests"))
     let first = try await Controller(endStation: endStation, entityID: controllerEntityID)
-    while await !endStation.hasFirstReceptionSettled {
-      try await Task.sleep(for: .milliseconds(5))
-    }
     var timing = ControllerTiming()
     timing.acmpCommandTimeouts = .milan
-    let second = try await Controller(
-      endStation: endStation,
-      entityID: UniqueIdentifier(0x0200_00FF_FE00_0011),
-      timing: timing
-    )
+    let creation = Task {
+      try await Controller(
+        endStation: endStation,
+        entityID: UniqueIdentifier(0x0200_00FF_FE00_0011),
+        timing: timing
+      )
+    }
+    guard case let .success(second)? = await result(of: creation) else {
+      return XCTFail("second controller not created")
+    }
     let command = Task {
       try await second.connectStream(talker: talkerStream, listener: listenerStream)
     }
@@ -1180,31 +1182,20 @@ final class ControllerTests: XCTestCase {
     await endStation.close()
   }
 
-  /// A command waiting for the end station to first receive can be cancelled, and fails when
-  /// the controller is closed.
-  func testAcmpCommandWaitingForReceptionEnds() async throws {
+  /// Closing an end station that has yet to receive ends a controller's creation on it.
+  func testClosingTheEndStationEndsControllerCreation() async throws {
     let port = LateReceivingPort(network: network, receptionDelay: .seconds(10))
     let endStation = EndStation(port: port, logger: Logger(label: "ControllerTests"))
-    let controller = try await Controller(endStation: endStation, entityID: controllerEntityID)
-    let cancelled = Task {
-      try await controller.connectStream(talker: talkerStream, listener: listenerStream)
+    let creation = Task {
+      try await Controller(endStation: endStation, entityID: controllerEntityID)
     }
-    let closed = Task {
-      try await controller.connectStream(talker: talkerStream, listener: listenerStream)
-    }
-    try await Task.sleep(for: .milliseconds(50))
-    cancelled.cancel()
-    switch await result(of: cancelled) {
-    case .failure(is CancellationError): break
-    case let result: XCTFail("expected CancellationError, got \(String(describing: result))")
-    }
-    await controller.close()
-    switch await result(of: closed) {
-    case .failure(AcmpStatus.internalError): break
-    case let result: XCTFail("expected INTERNAL_ERROR, got \(String(describing: result))")
-    }
-    XCTAssertEqual(entity.receivedCount(where: isConnectRxCommand), 0)
+    let early = await result(of: creation, within: .milliseconds(50))
+    XCTAssertNil(early, "controller created before its end station received")
     await endStation.close()
+    switch await result(of: creation) {
+    case .failure(EndStationError.closed): break
+    case let result: XCTFail("expected EndStationError.closed, got \(String(describing: result))")
+    }
   }
 
   // a bind can request connection flags such as STREAMING_WAIT (IEEE 1722.1-2021 Table 8-4)
@@ -1353,7 +1344,9 @@ final class ControllerTests: XCTestCase {
     await controller.close()
   }
 
-  /// A port that keeps failing is tried again ever less often, and reported once.
+  /// A port that keeps failing is tried again ever less often, and not reported again; its first
+  /// failure may come as the controller is created, before its events are subscribed, so it is
+  /// testReceptionRecoversAfterReceiveEnds that shows a failure being reported.
   func testRepeatedReceiveFailureBacksOff() async throws {
     let port = FailedPort()
     let endStation = EndStation(port: port, logger: Logger(label: "ControllerTests"))
@@ -1371,7 +1364,7 @@ final class ControllerTests: XCTestCase {
     try await Task.sleep(for: .milliseconds(500))
     XCTAssertGreaterThanOrEqual(port.receptions.withLock { $0 }, 2)
     XCTAssertLessThanOrEqual(port.receptions.withLock { $0 }, 4)
-    XCTAssertEqual(transportErrors.withLock { $0 }, 1)
+    XCTAssertLessThanOrEqual(transportErrors.withLock { $0 }, 1)
     await controller.close()
     await endStation.close()
   }

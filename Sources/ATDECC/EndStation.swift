@@ -80,8 +80,9 @@ public actor EndStation<Port: NetworkPort> {
   private var _isClosed = false
   /// Whether the port is receiving, so that answers to an ENTITY_DISCOVER would be received.
   private(set) var isReceiving = false
-  /// Whether the port has first received, failed to, or been found to have its link down.
-  private(set) var hasFirstReceptionSettled = false
+  /// Those awaiting `firstReceptionSettled()`; nil once the port has first received, failed
+  /// to, or been found to have its link down, or the end station is closed.
+  private var _firstReceptionWaiters: [CheckedContinuation<(), Never>]? = []
 
   public init(port: Port, logger: Logger = Logger(label: "com.padl.AVDECCSwift")) {
     self.port = port
@@ -106,7 +107,7 @@ public actor EndStation<Port: NetworkPort> {
     _linkStateTask?.cancel()
     _linkStateTask = nil
     _controllers = [:]
-    hasFirstReceptionSettled = true
+    _settleFirstReception()
   }
 
   // MARK: - Entity IDs
@@ -235,9 +236,27 @@ public actor EndStation<Port: NetworkPort> {
   private func _receptionBegan() async {
     guard !_isClosed, !Task.isCancelled else { return }
     isReceiving = true
-    hasFirstReceptionSettled = true
+    _settleFirstReception()
     for controller in _liveControllers {
       await controller._handleReceptionBegan()
+    }
+  }
+
+  /// Returns once the port has first received, failed to, or reported its link down, so that
+  /// a response to what is sent from then on is not missed; at once thereafter. Throws
+  /// `EndStationError.closed` if the end station is, or meanwhile becomes, closed.
+  func firstReceptionSettled() async throws {
+    if _firstReceptionWaiters != nil {
+      await withCheckedContinuation { _firstReceptionWaiters?.append($0) }
+    }
+    guard !_isClosed else { throw EndStationError.closed }
+  }
+
+  private func _settleFirstReception() {
+    let waiters = _firstReceptionWaiters ?? []
+    _firstReceptionWaiters = nil
+    for waiter in waiters {
+      waiter.resume()
     }
   }
 
@@ -261,7 +280,7 @@ public actor EndStation<Port: NetworkPort> {
       _startReceiving()
     } else {
       _stopReceiving()
-      hasFirstReceptionSettled = true
+      _settleFirstReception()
     }
     for controller in _liveControllers {
       await controller._handleLinkState(isUp: isUp)
@@ -278,7 +297,7 @@ public actor EndStation<Port: NetworkPort> {
   /// `isRepeated` if nothing has been received since reception last ended.
   private func _receiveEnded(failure: (any Error)?, isRepeated: Bool) async {
     isReceiving = false
-    hasFirstReceptionSettled = true
+    _settleFirstReception()
     guard !_isClosed else { return }
     let reason = failure.map { "receive failed: \($0)" } ?? "reception ended"
     guard !isRepeated else {
