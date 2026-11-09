@@ -24,6 +24,10 @@ import FlyingFox
 /// The request path on which an APS accepts WebSocket upgrades.
 public let AppWebSocketPath = "/ws"
 
+/// The route to mount an `AtdeccProxyHandler` on beside other routes: WebSocket upgrades on
+/// `AppWebSocketPath`. Mount it before any route that would match that path too.
+public let AppWebSocketRoute = HTTPRoute("GET \(AppWebSocketPath)")
+
 /// The largest WebSocket message an APS accepts: a little more than the largest APPDU.
 public let AppWebSocketMaximumMessageLength = 4096
 
