@@ -138,6 +138,7 @@ final class AppRequestTests: XCTestCase {
     return request(.GET, path, headers: headers)
   }
 
+  #if HTTPTunnel
   func testConnectIsAcceptedOnAnyTarget() {
     for path in ["/", "/proxy"] {
       let outcome = appRequestOutcome(on: request(.CONNECT, path), allowedWebSocketOrigins: [])
@@ -145,6 +146,16 @@ final class AppRequestTests: XCTestCase {
       XCTAssertEqual(outcome.transport, .connect)
     }
   }
+  #else
+  /// Without the HTTPTunnel trait the server supports CONNECT for no resource (RFC 9110
+  /// Section 15.6.2).
+  func testConnectIsRefusedWithoutTheTrait() {
+    let outcome = appRequestOutcome(on: request(.CONNECT, "/"), allowedWebSocketOrigins: [])
+    XCTAssertEqual(outcome.requestValid, 501)
+    XCTAssertNil(outcome.transport)
+    XCTAssertEqual(outcome.refusal.headers[HTTPHeader("Allow")], "GET")
+  }
+  #endif
 
   func testOtherRequestsAreRefused() {
     XCTAssertEqual(appRequestOutcome(on: request(.GET, "/"), allowedWebSocketOrigins: []).requestValid, 404)

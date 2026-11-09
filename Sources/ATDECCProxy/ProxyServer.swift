@@ -242,7 +242,12 @@ private struct AtdeccProxyRequestHandler<Port: NetworkPort>: HTTPHandler {
     let connection = AtdeccProxyConnection(port: port, entityIDs: entityIDs, logger: logger)
     switch transport {
     case .connect:
+      #if HTTPTunnel
       return HTTPResponse(tunnel: AtdeccProxyTunnel(connection: connection, slot: slot, configuration: configuration, logger: logger))
+      #else
+      // appRequestOutcome refuses CONNECT without the trait
+      return AppRequestOutcome.refusedConnect.refusal
+      #endif
     case .webSocket:
       // the handshake is FlyingFox's: a malformed one is answered 400
       let channel = AtdeccProxyWebSocket(connection: connection, slot: slot, logger: logger)
@@ -250,6 +255,8 @@ private struct AtdeccProxyRequestHandler<Port: NetworkPort>: HTTPHandler {
     }
   }
 }
+
+#if HTTPTunnel
 
 //
 // CONNECT - Clause C.1
@@ -335,6 +342,8 @@ private struct AtdeccProxyTunnel<Port: NetworkPort>: HTTPTunnelHandler {
     await connection.apcClosed(closeCode: nil)
   }
 }
+
+#endif
 
 //
 // WebSocket - an extension, not part of Annex C

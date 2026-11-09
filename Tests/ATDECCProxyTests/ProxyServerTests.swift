@@ -53,6 +53,38 @@ private final class TestApc {
     try await send(testWebSocketFrame(opcode: 0x2, appdu.serialized()))
   }
 
+  /// Whether `open(port:)` upgraded to WebSocket rather than sending CONNECT.
+  private(set) var isWebSocket = false
+
+  /// Opens the APP session with CONNECT if the server serves it (the HTTPTunnel trait),
+  /// otherwise with a WebSocket upgrade; the response head.
+  @discardableResult
+  func open(port: UInt16) async throws -> String {
+    #if HTTPTunnel
+    try await send(testConnectRequest(port: port))
+    #else
+    isWebSocket = true
+    var upgrade = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+    upgrade += "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    try await send(Array(upgrade.utf8))
+    #endif
+    return try await readHead()
+  }
+
+  /// An APPDU sent on the session `open(port:)` opened.
+  func sendAppdu(_ appdu: Appdu) async throws {
+    if isWebSocket {
+      try await sendMessage(appdu)
+    } else {
+      try await send(appdu.serialized())
+    }
+  }
+
+  /// The next APPDU of the session `open(port:)` opened.
+  func nextAppdu() async throws -> Appdu {
+    isWebSocket ? try await readMessageAppdu() : try await readAppdu()
+  }
+
   private func fill() async throws {
     let bytes = try await socket.receive(count: 4096, timeout: timeout)
     guard !bytes.isEmpty else { throw POSIXError(.ECONNRESET) }
@@ -183,11 +215,14 @@ final class ProxyServerTests: XCTestCase {
     throw POSIXError(.ETIMEDOUT)
   }
 
+  #if HTTPTunnel
   func testAConnectApcIsServedAsInAnnexC() async throws {
     let apc = try await TestApc(port: port)
     try await apc.send(testConnectRequest(port: port))
     let head = try await apc.readHead()
-    XCTAssertEqual(head, "HTTP/1.1 200 OK\r\n\r\n")
+    // the minimum of Clause C.5.2.2.6; FlyingFox may add a Date field, but no length
+    XCTAssertTrue(head.hasPrefix("HTTP/1.1 200 OK\r\n"), head)
+    XCTAssertFalse(head.contains("Content-Length") || head.contains("Transfer-Encoding"), head)
 
     let linkUp = try await apc.readAppdu()
     XCTAssertEqual(linkUp.messageType, .linkUp)
@@ -233,6 +268,15 @@ final class ProxyServerTests: XCTestCase {
     let awaited2 = try await apc.readToEnd()
     XCTAssertEqual(awaited2, [])
   }
+  #else
+  func testConnectIsRefusedWithoutTheTrait() async throws {
+    let apc = try await TestApc(port: port)
+    try await apc.send(testConnectRequest(port: port))
+    let head = try await apc.readHead()
+    XCTAssertTrue(head.hasPrefix("HTTP/1.1 501 Not Implemented\r\n"), head)
+    XCTAssertTrue(head.contains("Allow: GET\r\n"), head)
+  }
+  #endif
 
   /// The exchange of the Noodles controller: GET /ws from its origin, no subprotocol, one APPDU
   /// per binary message, ENTITY_ID_REQUEST first.
@@ -287,13 +331,11 @@ final class ProxyServerTests: XCTestCase {
     _ = await serverTask.result
     try await startServer(maximumConnections: 1)
     let first = try await TestApc(port: port)
-    try await first.send(testConnectRequest(port: port))
-    let awaited8 = try await first.readHead()
-    XCTAssertEqual(awaited8, "HTTP/1.1 200 OK\r\n\r\n")
+    let accepted = try await first.open(port: port)
+    XCTAssertTrue(Self.isAccepted(accepted), accepted)
     let second = try await TestApc(port: port)
-    try await second.send(testConnectRequest(port: port))
-    let awaited9 = try await second.readHead().hasPrefix("HTTP/1.1 503 Service Unavailable\r\n")
-    XCTAssertTrue(awaited9)
+    let refused = try await second.open(port: port)
+    XCTAssertTrue(refused.hasPrefix("HTTP/1.1 503 Service Unavailable\r\n"), refused)
   }
 
   func testTwoApcsAreServedAtOnceWithDistinctEntityIDs() async throws {
@@ -302,20 +344,24 @@ final class ProxyServerTests: XCTestCase {
     var apcs = [TestApc]()
     for _ in 0..<2 {
       let apc = try await TestApc(port: port)
-      try await apc.send(testConnectRequest(port: port))
-      _ = try await apc.readHead()
-      _ = try await apc.readAppdu()
-      try await apc.send(Appdu.entityIDRequest(apcMacAddress: apcMacAddress, entityID: requested).serialized())
-      ids.append(try await apc.readAppdu().entityID!)
+      try await apc.open(port: port)
+      _ = try await apc.nextAppdu()
+      try await apc.sendAppdu(.entityIDRequest(apcMacAddress: apcMacAddress, entityID: requested))
+      ids.append(try await apc.nextAppdu().entityID!)
       apcs.append(apc)
     }
     XCTAssertEqual(ids[0], requested)
     XCTAssertNotEqual(ids[1], requested)
     try await entitySends(makeAvtpdu())
     for apc in apcs {
-      let awaited10 = try await apc.readAppdu().messageType
+      let awaited10 = try await apc.nextAppdu().messageType
       XCTAssertEqual(awaited10, .atdeccFromAps)
     }
+  }
+
+  /// A head accepting the session: 200 for CONNECT, 101 for a WebSocket upgrade.
+  private static func isAccepted(_ head: String) -> Bool {
+    head.hasPrefix("HTTP/1.1 200 OK\r\n") || head.hasPrefix("HTTP/1.1 101 Switching Protocols\r\n")
   }
 
   private func upgrade(_ apc: TestApc) async throws {
@@ -361,26 +407,26 @@ final class ProxyServerTests: XCTestCase {
     try await startServer(maximumConnections: 1)
     let idle = try await TestApc(port: port)
     let apc = try await TestApc(port: port)
-    try await apc.send(testConnectRequest(port: port))
-    let head = try await apc.readHead()
-    XCTAssertEqual(head, "HTTP/1.1 200 OK\r\n\r\n")
+    let head = try await apc.open(port: port)
+    XCTAssertTrue(Self.isAccepted(head), head)
     _ = idle
   }
 
   func testAnEntityIDAdvertisedOnTheLanIsNotAssigned() async throws {
     let lanID = UniqueIdentifier(0x0200_00FF_FE00_0042)
     let apc = try await TestApc(port: port)
-    try await apc.send(testConnectRequest(port: port))
-    _ = try await apc.readHead()
-    _ = try await apc.readAppdu()
+    try await apc.open(port: port)
+    _ = try await apc.nextAppdu()
     try await entitySends(makeAdpdu(entityID: lanID.rawValue))
-    let advertisement = try await apc.readAppdu()
+    let advertisement = try await apc.nextAppdu()
     XCTAssertEqual(advertisement.messageType, .atdeccFromAps)
-    try await apc.send(Appdu.entityIDRequest(apcMacAddress: apcMacAddress, entityID: lanID).serialized())
-    let response = try await apc.readAppdu()
+    try await apc.sendAppdu(.entityIDRequest(apcMacAddress: apcMacAddress, entityID: lanID))
+    let response = try await apc.nextAppdu()
     XCTAssertNotEqual(response.entityID, lanID)
   }
 
+  #if HTTPTunnel
+  /// The CONNECT transport's write timeout; FlyingFox's WebSocket writes have none.
   func testAnApcThatStopsReadingIsDisconnected() async throws {
     serverTask.cancel()
     _ = await serverTask.result
@@ -402,15 +448,15 @@ final class ProxyServerTests: XCTestCase {
     _ = try await apc.readToEnd()
     XCTAssertLessThan(ContinuousClock.now - start, .seconds(4))
   }
+  #endif
 
   func testTheLinkGoingDownIsReported() async throws {
     let apc = try await TestApc(port: port)
-    try await apc.send(testConnectRequest(port: port))
-    _ = try await apc.readHead()
-    let awaited11 = try await apc.readAppdu().messageType
+    try await apc.open(port: port)
+    let awaited11 = try await apc.nextAppdu().messageType
     XCTAssertEqual(awaited11, .linkUp)
     connectionPorts.ports.withLock { $0.last }?.setLinkUp(false)
-    let linkDown = try await apc.readAppdu()
+    let linkDown = try await apc.nextAppdu()
     XCTAssertEqual(linkDown.messageType, .linkDown)
   }
 }

@@ -49,6 +49,13 @@ let package = Package(
       targets: ["Capture"]
     ),
   ],
+  traits: [
+    .trait(
+      name: "HTTPTunnel",
+      description: "Serve the ATDECC proxy over HTTP CONNECT as well as WebSocket; needs FlyingFox's HTTPResponse(tunnel:) (swhitty/FlyingFox#254)"
+    ),
+    .default(enabledTraits: []),
+  ],
   dependencies: [
     .package(url: "https://github.com/PADL/IEEE802Swift", from: "0.2.1"),
     .package(url: "https://github.com/PADL/IORingSwift", from: "2.3.1"),

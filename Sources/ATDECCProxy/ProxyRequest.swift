@@ -62,6 +62,10 @@ public struct AppRequestOutcome: Sendable, Equatable {
     Self(requestValid: status, transport: nil, headers: headers)
   }
 
+  /// CONNECT without the HTTPTunnel trait: 501, as the server supports it for no resource
+  /// (RFC 9110 Section 15.6.2); Allow names the method it does support, for /ws.
+  static let refusedConnect = Self.refused(501, ["Allow": "GET"])
+
   static func reasonPhrase(_ status: Int) -> String {
     switch status {
     case 400: "Bad Request"
@@ -69,19 +73,25 @@ public struct AppRequestOutcome: Sendable, Equatable {
     case 404: "Not Found"
     case 405: "Method Not Allowed"
     case 503: "Service Unavailable"
+    case 501: "Not Implemented"
     case 505: "HTTP Version Not Supported"
     default: "Error"
     }
   }
 }
 
-/// Decides an APC's request. CONNECT is accepted on any target, as the Noodles/Sienda proxy
-/// does, since the advertised path is "/" (Clause C.3.5); a WebSocket upgrade only on
-/// `AppWebSocketPath`, and only from an allowed origin. The handshake itself is FlyingFox's.
+/// Decides an APC's request. With the HTTPTunnel trait, CONNECT is accepted on any target, as
+/// the Noodles/Sienda proxy does, since the advertised path is "/" (Clause C.3.5); without it,
+/// CONNECT is refused 501. A WebSocket upgrade is accepted only on `AppWebSocketPath`, and only
+/// from an allowed origin. The handshake itself is FlyingFox's.
 public func appRequestOutcome(on request: HTTPRequest, allowedWebSocketOrigins: [String]) -> AppRequestOutcome {
   guard request.version == .http11 || request.version == HTTPVersion("HTTP/1.0") else { return .refused(505) }
   if request.method == .CONNECT {
+    #if HTTPTunnel
     return AppRequestOutcome(requestValid: 200, transport: .connect, headers: [:])
+    #else
+    return .refusedConnect
+    #endif
   }
   guard request.path == AppWebSocketPath else { return .refused(404) }
   guard request.method == .GET else { return .refused(405, ["Allow": "GET"]) }
